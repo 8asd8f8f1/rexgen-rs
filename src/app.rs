@@ -18,6 +18,17 @@ use crate::model::ByteSize;
 
 pub(crate) fn run() -> Result<()> {
     let m = cli::app().get_matches();
+    if let Some(threads) = m.get_one::<usize>("threads") {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(*threads)
+            .build_global()
+            .map_err(|err| {
+                Error::Message(format!(
+                    "failed to configure thread pool: {err}"
+                ))
+            })?;
+    }
+
     if let Some(("completions", sub_m)) = m.subcommand() {
         let shell = *sub_m
             .get_one::<clap_complete::Shell>("shell")

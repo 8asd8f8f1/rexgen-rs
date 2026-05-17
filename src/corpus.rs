@@ -64,7 +64,7 @@ impl Corpus {
         let mut emitted = 0u64;
         let mut total = BigUint::from(0u8);
 
-        generate::generate(&self.hir, &constraints, |s| {
+        generate::generate_parallel(&self.hir, &constraints, |s| {
             if request.limit.is_some_and(|limit| emitted >= limit) {
                 return Ok(false);
             }

@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use regex_syntax::hir::Class;
 use regex_syntax::hir::Hir;
 use regex_syntax::hir::HirKind;
@@ -6,6 +7,18 @@ use crate::calculate;
 use crate::corpus::LengthConstraints;
 use crate::error::Error;
 use crate::error::Result;
+
+const PARALLEL_CHUNK_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+enum GenerationChunk<'a> {
+    Hir(&'a Hir),
+    RepetitionTail {
+        sub: &'a Hir,
+        min: u32,
+        max: u32,
+        prefix: String,
+    },
+}
 
 pub(crate) fn generate<F>(
     hir: &Hir,
@@ -17,6 +30,134 @@ where
 {
     let mut current = String::new();
     generate_inner(hir, constraints, &mut current, &mut emit).map(|_| ())
+}
+
+pub(crate) fn generate_parallel<F>(
+    hir: &Hir,
+    constraints: &LengthConstraints,
+    mut emit: F,
+) -> Result<()>
+where
+    F: FnMut(&str) -> Result<bool>,
+{
+    if rayon::current_num_threads() <= 1 {
+        return generate(hir, constraints, emit);
+    }
+    let Some(chunks) = generation_chunks(hir, constraints)? else {
+        return generate(hir, constraints, emit);
+    };
+    if chunks.len() <= 1 {
+        return generate(hir, constraints, emit);
+    }
+
+    let generated = chunks
+        .par_iter()
+        .map(|chunk| collect_chunk(chunk, constraints))
+        .collect::<Result<Vec<_>>>()?;
+
+    if generated.iter().any(|chunk| chunk.overflowed) {
+        return generate(hir, constraints, emit);
+    }
+
+    for chunk in generated {
+        for s in chunk.strings {
+            if !emit(&s)? {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+struct ChunkOutput {
+    strings: Vec<String>,
+    overflowed: bool,
+}
+
+fn collect_chunk(
+    chunk: &GenerationChunk<'_>,
+    constraints: &LengthConstraints,
+) -> Result<ChunkOutput> {
+    let mut strings = Vec::new();
+    let mut bytes = 0usize;
+    let mut overflowed = false;
+    let mut emit = |s: &str| {
+        bytes = bytes.saturating_add(s.len());
+        if bytes > PARALLEL_CHUNK_BUFFER_BYTES {
+            overflowed = true;
+            return Ok(false);
+        }
+        strings.push(s.to_string());
+        Ok(true)
+    };
+
+    match chunk {
+        GenerationChunk::Hir(hir) => {
+            let mut current = String::new();
+            generate_inner(hir, constraints, &mut current, &mut emit)?;
+        }
+        GenerationChunk::RepetitionTail {
+            sub,
+            min,
+            max,
+            prefix,
+        } => {
+            let mut current = prefix.clone();
+            generate_repeat_rec(
+                sub,
+                1,
+                *min,
+                *max,
+                constraints,
+                &mut current,
+                &mut emit,
+            )?;
+        }
+    }
+
+    Ok(ChunkOutput {
+        strings,
+        overflowed,
+    })
+}
+
+fn generation_chunks<'a>(
+    hir: &'a Hir,
+    constraints: &LengthConstraints,
+) -> Result<Option<Vec<GenerationChunk<'a>>>> {
+    match hir.kind() {
+        HirKind::Alternation(parts) => {
+            Ok(Some(parts.iter().map(GenerationChunk::Hir).collect()))
+        }
+        HirKind::Repetition(rep) if rep.min > 0 => {
+            let max = match rep.max {
+                Some(max) => max,
+                None => {
+                    let Some(max_len) = constraints.max else {
+                        return Ok(None);
+                    };
+                    repetition_cap(&rep.sub, max_len)?
+                }
+            };
+            if rep.min != max {
+                return Ok(None);
+            }
+            let mut pieces = Vec::new();
+            collect_strings(&rep.sub, constraints.max, &mut pieces)?;
+            let chunks = pieces
+                .into_iter()
+                .filter(|piece| !piece.is_empty())
+                .map(|prefix| GenerationChunk::RepetitionTail {
+                    sub: &rep.sub,
+                    min: rep.min,
+                    max,
+                    prefix,
+                })
+                .collect::<Vec<_>>();
+            Ok(Some(chunks))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn generate_inner<F>(
@@ -155,37 +296,46 @@ fn generate_repeat<F>(
 where
     F: FnMut(&str) -> Result<bool>,
 {
-    fn rec<F>(
-        sub: &Hir,
-        reps: u32,
-        min: u32,
-        max: u32,
-        constraints: &LengthConstraints,
-        current: &mut String,
-        emit: &mut F,
-    ) -> Result<bool>
-    where
-        F: FnMut(&str) -> Result<bool>,
-    {
-        if reps >= min && !emit_if_allowed(current, constraints, emit)? {
-            return Ok(false);
-        }
-        if reps == max {
+    generate_repeat_rec(sub, 0, min, max, constraints, current, emit)
+}
+
+fn generate_repeat_rec<F>(
+    sub: &Hir,
+    reps: u32,
+    min: u32,
+    max: u32,
+    constraints: &LengthConstraints,
+    current: &mut String,
+    emit: &mut F,
+) -> Result<bool>
+where
+    F: FnMut(&str) -> Result<bool>,
+{
+    if reps >= min && !emit_if_allowed(current, constraints, emit)? {
+        return Ok(false);
+    }
+    if reps == max {
+        return Ok(true);
+    }
+    let mut keep = true;
+    generate_prefixes(sub, constraints.max, current.len(), &mut |piece| {
+        if piece.is_empty() {
             return Ok(true);
         }
-        let mut keep = true;
-        generate_prefixes(sub, constraints.max, current.len(), &mut |piece| {
-            if piece.is_empty() {
-                return Ok(true);
-            }
-            current.push_str(piece);
-            keep = rec(sub, reps + 1, min, max, constraints, current, emit)?;
-            truncate_str(current, piece.len());
-            Ok(keep)
-        })?;
+        current.push_str(piece);
+        keep = generate_repeat_rec(
+            sub,
+            reps + 1,
+            min,
+            max,
+            constraints,
+            current,
+            emit,
+        )?;
+        truncate_str(current, piece.len());
         Ok(keep)
-    }
-    rec(sub, 0, min, max, constraints, current, emit)
+    })?;
+    Ok(keep)
 }
 
 fn generate_prefixes<F>(
@@ -350,6 +500,7 @@ mod tests {
     use regex_syntax::Parser;
 
     use super::generate;
+    use super::generate_parallel;
     use crate::corpus::LengthConstraints;
 
     fn hir(pattern: &str) -> regex_syntax::hir::Hir {
@@ -369,5 +520,38 @@ mod tests {
         })
         .unwrap();
         assert_eq!(out, vec!["a", "b", "bb"]);
+    }
+
+    #[test]
+    fn parallel_generation_preserves_alternation_order() {
+        let mut out = Vec::new();
+        generate_parallel(&hir("a|b{1,2}|c"), &constraints(0, None), |s| {
+            out.push(s.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(out, vec!["a", "b", "bb", "c"]);
+    }
+
+    #[test]
+    fn parallel_generation_preserves_fixed_repetition_order() {
+        let mut out = Vec::new();
+        generate_parallel(&hir("[ab]{2}"), &constraints(0, None), |s| {
+            out.push(s.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(out, vec!["aa", "ab", "ba", "bb"]);
+    }
+
+    #[test]
+    fn parallel_generation_honors_callback_stop_in_output_order() {
+        let mut out = Vec::new();
+        generate_parallel(&hir("[ab]{2}"), &constraints(0, None), |s| {
+            out.push(s.to_string());
+            Ok(out.len() < 2)
+        })
+        .unwrap();
+        assert_eq!(out, vec!["aa", "ab"]);
     }
 }

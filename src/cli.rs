@@ -119,6 +119,14 @@ pub(crate) fn app() -> Command {
                 .help("Write generated strings to a file instead of stdout")
                 .value_parser(ValueParser::path_buf()),
         )
+        .arg(
+            Arg::new("threads")
+                .long("threads")
+                .action(ArgAction::Set)
+                .value_name("N")
+                .help("Number of worker threads to use")
+                .value_parser(parse_threads),
+        )
         .subcommand(
             Command::new("completions")
                 .about("Generate shell completion script")
@@ -138,11 +146,22 @@ pub(crate) fn app() -> Command {
         )
 }
 
+fn parse_threads(input: &str) -> core::result::Result<usize, String> {
+    let threads = input
+        .parse::<usize>()
+        .map_err(|_| format!("invalid thread count: {input}"))?;
+    if threads == 0 {
+        return Err("thread count must be at least 1".to_string());
+    }
+    Ok(threads)
+}
+
 #[cfg(test)]
 mod tests {
     use clap::error::ErrorKind;
 
     use super::app;
+    use super::parse_threads;
 
     fn help_output(args: &[&str]) -> String {
         let err = app().try_get_matches_from(args).unwrap_err();
@@ -159,6 +178,7 @@ mod tests {
         assert!(help.contains("completions"));
         assert!(help.contains("Options:"));
         assert!(help.contains("--generate"));
+        assert!(help.contains("--threads"));
         assert!(help.contains("Examples:"));
     }
 
@@ -178,5 +198,11 @@ mod tests {
         assert!(help.contains("Usage: rexgen completions <SHELL>"));
         assert!(help.contains("Arguments:"));
         assert!(help.contains("<SHELL>"));
+    }
+
+    #[test]
+    fn threads_must_be_positive() {
+        assert_eq!(parse_threads("1").unwrap(), 1);
+        assert!(parse_threads("0").is_err());
     }
 }

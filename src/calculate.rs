@@ -1,6 +1,7 @@
 use num_bigint::BigUint;
 use num_traits::One;
 use num_traits::Zero;
+use rayon::prelude::*;
 use regex_syntax::hir::Class;
 use regex_syntax::hir::Hir;
 use regex_syntax::hir::HirKind;
@@ -234,14 +235,14 @@ fn distribution(hir: &Hir, max_len: Option<usize>) -> Result<Dist> {
         HirKind::Capture(cap) => distribution(&cap.sub, max_len)?,
         HirKind::Concat(parts) => {
             let parts = parts
-                .iter()
+                .par_iter()
                 .map(|part| distribution(part, max_len))
                 .collect::<Result<Vec<_>>>()?;
             Dist::concat(&parts, max_len)
         }
         HirKind::Alternation(parts) => {
             let parts = parts
-                .iter()
+                .par_iter()
                 .map(|part| distribution(part, max_len))
                 .collect::<Result<Vec<_>>>()?;
             Dist::alternate(&parts)
