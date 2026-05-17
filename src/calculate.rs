@@ -1,3 +1,5 @@
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 use num_bigint::BigUint;
 use num_traits::One;
 use num_traits::Zero;
@@ -60,12 +62,13 @@ impl Dist {
     }
 
     fn class(widths: &[usize]) -> Self {
-        let mut items: Vec<(usize, BigUint)> = Vec::new();
+        let arena = Bump::new();
+        let mut scratch = BumpVec::new_in(&arena);
         for &width in widths {
-            add_count(&mut items, width, BigUint::one());
+            scratch.push((width, BigUint::one()));
         }
         Self {
-            items,
+            items: compact_counts(scratch),
             infinite: false,
         }
     }
@@ -86,16 +89,17 @@ impl Dist {
     }
 
     fn alternate(parts: &[Self]) -> Self {
-        let mut out = Vec::new();
+        let arena = Bump::new();
+        let mut scratch = BumpVec::new_in(&arena);
         let mut infinite = false;
         for part in parts {
             infinite |= part.infinite;
             for (len, count) in &part.items {
-                add_count(&mut out, *len, count.clone());
+                scratch.push((*len, count.clone()));
             }
         }
         Self {
-            items: out,
+            items: compact_counts(scratch),
             infinite,
         }
     }
@@ -105,16 +109,17 @@ impl Dist {
         let mut infinite = false;
         for part in parts {
             infinite |= part.infinite;
-            let mut next = Vec::new();
+            let arena = Bump::new();
+            let mut scratch = BumpVec::new_in(&arena);
             for (left_len, left_count) in &acc.items {
                 for (right_len, right_count) in &part.items {
                     let len = left_len + right_len;
                     if max_len.is_none_or(|max| len <= max) {
-                        add_count(&mut next, len, left_count * right_count);
+                        scratch.push((len, left_count * right_count));
                     }
                 }
             }
-            acc.items = next;
+            acc.items = compact_counts(scratch);
         }
         acc.infinite |= infinite;
         acc
@@ -157,12 +162,13 @@ impl Dist {
             };
         };
 
-        let mut out = Vec::new();
+        let arena = Bump::new();
+        let mut scratch = BumpVec::new_in(&arena);
         let mut current = Self::empty_string();
         for reps in 0..=max_reps {
             if reps >= min {
                 for (len, count) in &current.items {
-                    add_count(&mut out, *len, count.clone());
+                    scratch.push((*len, count.clone()));
                 }
             }
             if reps == max_reps {
@@ -171,7 +177,7 @@ impl Dist {
             current = Self::concat(&[current, sub.clone()], max_len);
         }
         Self {
-            items: out,
+            items: compact_counts(scratch),
             infinite: false,
         }
     }
@@ -196,16 +202,25 @@ impl Dist {
     }
 }
 
-fn add_count(items: &mut Vec<(usize, BigUint)>, len: usize, count: BigUint) {
-    if let Some((_, existing)) = items
-        .iter_mut()
-        .find(|(existing_len, _)| *existing_len == len)
-    {
-        *existing += count;
-    } else {
-        items.push((len, count));
-        items.sort_by_key(|(len, _)| *len);
+fn compact_counts(
+    items: BumpVec<'_, (usize, BigUint)>,
+) -> Vec<(usize, BigUint)> {
+    let mut items = items.into_iter().collect::<Vec<_>>();
+    if items.len() <= 1 {
+        return items;
     }
+    items.sort_by_key(|(len, _)| *len);
+    let mut compacted = Vec::with_capacity(items.len());
+    for (len, count) in items {
+        if let Some((existing_len, existing)) = compacted.last_mut() {
+            if *existing_len == len {
+                *existing += count;
+                continue;
+            }
+        }
+        compacted.push((len, count));
+    }
+    compacted
 }
 
 pub(crate) fn analyze(

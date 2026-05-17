@@ -4,6 +4,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 use rayon::prelude::*;
 use regex_syntax::hir::Class;
 use regex_syntax::hir::Hir;
@@ -27,6 +29,8 @@ enum GenerationChunk<'a> {
         prefix: String,
     },
 }
+
+type ArenaStrings<'a> = BumpVec<'a, &'a str>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GenerationOrder {
@@ -323,16 +327,18 @@ fn generation_chunks<'a>(
             if rep.min != max {
                 return Ok(None);
             }
-            let mut pieces = Vec::new();
-            collect_strings(&rep.sub, constraints.max, &mut pieces)?;
+            let arena = Bump::new();
+            let mut pieces = BumpVec::new_in(&arena);
+            collect_strings(&rep.sub, constraints.max, &arena, &mut pieces)?;
             let chunks = pieces
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|piece| !piece.is_empty())
                 .map(|prefix| GenerationChunk::RepetitionTail {
                     sub: &rep.sub,
                     min: rep.min,
                     max,
-                    prefix,
+                    prefix: prefix.to_string(),
                 })
                 .collect::<Vec<_>>();
             Ok(Some(chunks))
@@ -364,15 +370,17 @@ where
             Ok(keep_going)
         }
         HirKind::Class(class) => {
-            for s in class_strings(class)? {
-                current.push_str(&s);
-                let keep_going = emit_if_allowed(current, constraints, emit)?;
+            let mut keep_going = true;
+            class_strings(class, &mut |s| {
+                current.push_str(s);
+                keep_going = emit_if_allowed(current, constraints, emit)?;
                 truncate_str(current, s.len());
                 if !keep_going {
                     return Ok(false);
                 }
-            }
-            Ok(true)
+                Ok(true)
+            })?;
+            Ok(keep_going)
         }
         HirKind::Capture(cap) => {
             generate_inner(&cap.sub, constraints, order, current, emit)
@@ -466,8 +474,7 @@ where
                     constraints.max,
                     current.len(),
                     &mut |candidate| {
-                        let saved = candidate.to_string();
-                        current.push_str(&saved);
+                        current.push_str(candidate);
                         keep = rec(
                             &parts[1..],
                             constraints,
@@ -475,7 +482,7 @@ where
                             current,
                             emit,
                         )?;
-                        truncate_str(current, saved.len());
+                        truncate_str(current, candidate.len());
                         Ok(keep)
                     },
                 )?;
@@ -556,9 +563,9 @@ fn generate_fixed_repeat_inverted<F>(
 where
     F: FnMut(&str) -> Result<bool>,
 {
-    fn rec<F>(
-        pieces: &[String],
-        slots: &mut [String],
+    fn rec<'a, F>(
+        pieces: &[&'a str],
+        slots: &mut [&'a str],
         slot: isize,
         constraints: &LengthConstraints,
         current: &mut String,
@@ -578,7 +585,7 @@ where
         }
 
         for piece in pieces {
-            slots[slot as usize] = piece.clone();
+            slots[slot as usize] = piece;
             if !rec(pieces, slots, slot - 1, constraints, current, emit)? {
                 return Ok(false);
             }
@@ -586,12 +593,14 @@ where
         Ok(true)
     }
 
-    let mut pieces = Vec::new();
-    collect_strings(sub, constraints.max, &mut pieces)?;
+    let arena = Bump::new();
+    let mut pieces = BumpVec::new_in(&arena);
+    collect_strings(sub, constraints.max, &arena, &mut pieces)?;
     if pieces.iter().any(|piece| piece.is_empty()) {
         return Err(Error::Unsupported("inverted order for empty repetition"));
     }
-    let mut slots = vec![String::new(); reps as usize];
+    let pieces = pieces.into_iter().collect::<Vec<_>>();
+    let mut slots = vec![""; reps as usize];
     rec(
         &pieces,
         &mut slots,
@@ -650,58 +659,68 @@ fn generate_prefixes<F>(
 where
     F: FnMut(&str) -> Result<bool>,
 {
-    let mut out = Vec::new();
+    let arena = Bump::new();
+    let mut out = BumpVec::new_in(&arena);
     collect_strings(
         hir,
         max_len.map(|max| max.saturating_sub(current_len)),
+        &arena,
         &mut out,
     )?;
-    for s in out {
-        if !emit(&s)? {
+    for s in out.into_iter() {
+        if !emit(s)? {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn collect_strings(
-    hir: &Hir,
+fn collect_strings<'a>(
+    hir: &'a Hir,
     max_len: Option<usize>,
-    out: &mut Vec<String>,
+    arena: &'a Bump,
+    out: &mut ArenaStrings<'a>,
 ) -> Result<()> {
     match hir.kind() {
-        HirKind::Empty | HirKind::Look(_) => out.push(String::new()),
+        HirKind::Empty | HirKind::Look(_) => out.push(""),
         HirKind::Literal(lit) => {
             let s = std::str::from_utf8(&lit.0)
                 .map_err(|_| Error::Unsupported("non-UTF-8 literals"))?;
             if max_len.is_none_or(|max| s.len() <= max) {
-                out.push(s.to_string());
+                out.push(s);
             }
         }
         HirKind::Class(class) => {
-            for s in class_strings(class)? {
+            class_strings(class, &mut |s| {
                 if max_len.is_none_or(|max| s.len() <= max) {
-                    out.push(s);
+                    out.push(arena.alloc_str(s));
                 }
-            }
+                Ok(true)
+            })?;
         }
-        HirKind::Capture(cap) => collect_strings(&cap.sub, max_len, out)?,
+        HirKind::Capture(cap) => {
+            collect_strings(&cap.sub, max_len, arena, out)?
+        }
         HirKind::Alternation(parts) => {
             for part in parts {
-                collect_strings(part, max_len, out)?;
+                collect_strings(part, max_len, arena, out)?;
             }
         }
         HirKind::Concat(parts) => {
-            let mut acc = vec![String::new()];
+            let mut acc = BumpVec::new_in(arena);
+            acc.push("");
             for part in parts {
-                let mut pieces = Vec::new();
-                collect_strings(part, max_len, &mut pieces)?;
-                let mut next = Vec::new();
+                let mut pieces = BumpVec::new_in(arena);
+                collect_strings(part, max_len, arena, &mut pieces)?;
+                let mut next = BumpVec::new_in(arena);
                 for left in &acc {
                     for right in &pieces {
-                        let s = format!("{left}{right}");
-                        if max_len.is_none_or(|max| s.len() <= max) {
-                            next.push(s);
+                        let len = left.len() + right.len();
+                        if max_len.is_none_or(|max| len <= max) {
+                            let mut s = String::with_capacity(len);
+                            s.push_str(left);
+                            s.push_str(right);
+                            next.push(&*arena.alloc_str(&s));
                         }
                     }
                 }
@@ -713,30 +732,34 @@ fn collect_strings(
             let max = rep.max.ok_or(Error::Unsupported(
                 "unbounded repetition in nested generation",
             ))?;
-            collect_repeat_strings(&rep.sub, rep.min, max, max_len, out)?;
+            collect_repeat_strings(
+                &rep.sub, rep.min, max, max_len, arena, out,
+            )?;
         }
     }
     Ok(())
 }
 
-fn collect_repeat_strings(
-    sub: &Hir,
+fn collect_repeat_strings<'a>(
+    sub: &'a Hir,
     min: u32,
     max: u32,
     max_len: Option<usize>,
-    out: &mut Vec<String>,
+    arena: &'a Bump,
+    out: &mut ArenaStrings<'a>,
 ) -> Result<()> {
-    fn rec(
-        sub_strings: &[String],
+    fn rec<'a>(
+        sub_strings: &[&str],
         min: u32,
         max: u32,
         reps: u32,
         current: &mut String,
         max_len: Option<usize>,
-        out: &mut Vec<String>,
+        arena: &'a Bump,
+        out: &mut ArenaStrings<'a>,
     ) {
         if reps >= min {
-            out.push(current.clone());
+            out.push(arena.alloc_str(current));
         }
         if reps == max {
             return;
@@ -749,20 +772,32 @@ fn collect_repeat_strings(
                 continue;
             }
             current.push_str(piece);
-            rec(sub_strings, min, max, reps + 1, current, max_len, out);
+            rec(
+                sub_strings,
+                min,
+                max,
+                reps + 1,
+                current,
+                max_len,
+                arena,
+                out,
+            );
             truncate_str(current, piece.len());
         }
     }
 
-    let mut sub_strings = Vec::new();
-    collect_strings(sub, max_len, &mut sub_strings)?;
+    let mut sub_strings = BumpVec::new_in(arena);
+    collect_strings(sub, max_len, arena, &mut sub_strings)?;
+    let sub_strings = sub_strings.into_iter().collect::<Vec<_>>();
     let mut current = String::new();
-    rec(&sub_strings, min, max, 0, &mut current, max_len, out);
+    rec(&sub_strings, min, max, 0, &mut current, max_len, arena, out);
     Ok(())
 }
 
-fn class_strings(class: &Class) -> Result<Vec<String>> {
-    let mut out = Vec::new();
+fn class_strings<F>(class: &Class, emit: &mut F) -> Result<bool>
+where
+    F: FnMut(&str) -> Result<bool>,
+{
     match class {
         Class::Unicode(cls) => {
             for range in cls.ranges() {
@@ -770,7 +805,10 @@ fn class_strings(class: &Class) -> Result<Vec<String>> {
                 let end = range.end() as u32;
                 while c <= end {
                     if let Some(ch) = char::from_u32(c) {
-                        out.push(ch.to_string());
+                        let mut bytes = [0; 4];
+                        if !emit(ch.encode_utf8(&mut bytes))? {
+                            return Ok(false);
+                        }
                     }
                     c += 1;
                 }
@@ -780,7 +818,13 @@ fn class_strings(class: &Class) -> Result<Vec<String>> {
             for range in cls.ranges() {
                 for b in range.start()..=range.end() {
                     if b.is_ascii() {
-                        out.push(char::from(b).to_string());
+                        let bytes = [b];
+                        let s = std::str::from_utf8(&bytes).map_err(|_| {
+                            Error::Unsupported("non-UTF-8 byte classes")
+                        })?;
+                        if !emit(s)? {
+                            return Ok(false);
+                        }
                     } else {
                         return Err(Error::Unsupported(
                             "non-UTF-8 byte classes",
@@ -790,7 +834,7 @@ fn class_strings(class: &Class) -> Result<Vec<String>> {
             }
         }
     }
-    Ok(out)
+    Ok(true)
 }
 
 fn truncate_str(s: &mut String, bytes: usize) {
@@ -872,5 +916,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, vec!["aa", "ab"]);
+    }
+
+    #[test]
+    fn generates_unicode_classes_after_arena_collection() {
+        let mut out = Vec::new();
+        generate(&hir("[éa]{2}"), &constraints(0, None), |s| {
+            out.push(s.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(
+            out,
+            vec!["a", "é"]
+                .into_iter()
+                .flat_map(|left| {
+                    ["a", "é"]
+                        .into_iter()
+                        .map(move |right| format!("{left}{right}"))
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn generates_concat_and_repetition_after_arena_collection() {
+        let mut out = Vec::new();
+        generate(&hir("(ab|c)[12]{1,2}"), &constraints(0, None), |s| {
+            out.push(s.to_string());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(
+            out,
+            vec![
+                "ab1", "ab11", "ab12", "ab2", "ab21", "ab22", "c1", "c11",
+                "c12", "c2", "c21", "c22",
+            ]
+        );
     }
 }
