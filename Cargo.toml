@@ -1,0 +1,25 @@
+[package]
+name = "rexgen-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+bumpalo = { version = "3.20.2", features = ["collections"] }
+byte-unit = "5.2.0"
+clap = "4.6.1"
+clap_complete = "4.6.0"
+regex = "1.12.3"
+regex-automata = "0.4.14"
+regex-syntax = "0.8.10"
+thiserror = "2.0.18"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+rayon = "1.12.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
