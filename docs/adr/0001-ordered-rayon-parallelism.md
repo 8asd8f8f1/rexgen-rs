@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0002 Unordered Generation by Default](0002-unordered-generation-by-default.md)
 
 ## Context
 

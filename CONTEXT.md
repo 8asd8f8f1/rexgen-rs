@@ -52,6 +52,10 @@ _Avoid_: Ending string, last word, stop point
 A maximum cumulative emitted byte count used while generating strings.
 _Avoid_: Size limit, max output size
 
+**Generation Order**:
+The ordering policy used while emitting **Match Strings**.
+_Avoid_: Fast mode, parallel order
+
 **Emission Transform**:
 A change applied to emitted output that does not redefine the **Corpus**.
 _Avoid_: Corpus transform, pattern transform
@@ -80,6 +84,7 @@ _Avoid_: Usage guide, tutorial
 - A **Start Match String** affects generated **Match Strings**, but does not redefine the **Corpus**.
 - A **Stop Match String** affects generated **Match Strings**, but does not redefine the **Corpus**.
 - A **Total Byte Limit** affects emitted output, but does not redefine the **Corpus Byte Size**.
+- **Generation Order** affects the sequence of emitted **Match Strings**, but does not redefine the **Corpus**.
 - An **Emission Transform** affects emitted output, but does not redefine the **Corpus**.
 - **Generation Confirmation** applies before generating **Match Strings** unless explicitly bypassed.
 - A **Completion Script** describes the CLI interface, not any **Pattern** or **Corpus**.

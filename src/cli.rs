@@ -13,7 +13,8 @@ pub(crate) fn app() -> Command {
         .long_about(
             "rexgen counts how many UTF-8 strings a Rust regex can match, \
              estimates total corpus size in bytes, and can generate matching \
-             strings in deterministic regex traversal order.",
+             strings. Generation is unordered by default for throughput; use \
+             --ordered for deterministic regex traversal order.",
         )
         .subcommand_negates_reqs(true)
         .after_help(
@@ -100,6 +101,17 @@ pub(crate) fn app() -> Command {
             Arg::new("reverse-strings")
                 .long("reverse-strings")
                 .help("Reverse each emitted string")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("ordered")
+                .long("ordered")
+                .help("Generate in deterministic regex traversal order")
+                .long_help(
+                    "Generate in deterministic regex traversal order. This is \
+                     implied by --invert-order, --start-string, and \
+                     --stop-string.",
+                )
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -212,6 +224,7 @@ mod tests {
         assert!(help.contains("--start-string"));
         assert!(help.contains("--stop-string"));
         assert!(help.contains("--reverse-strings"));
+        assert!(help.contains("--ordered"));
         assert!(help.contains("--invert-order"));
         assert!(help.contains("Examples:"));
     }

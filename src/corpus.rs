@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use num_bigint::BigUint;
 use regex::Regex;
 use regex_syntax::Parser;
@@ -76,49 +78,80 @@ impl Corpus {
         let mut started = request.start_string.is_none();
         let mut stopped = false;
 
-        generate::generate_parallel(
-            &self.hir,
-            &constraints,
-            request.order,
-            |s| {
-                if stopped {
-                    return Ok(false);
-                }
-                if !started {
-                    if request.start_string.as_deref() == Some(s) {
-                        started = true;
-                    } else {
-                        return Ok(true);
-                    }
-                }
-                if request.limit.is_some_and(|limit| emitted >= limit) {
-                    return Ok(false);
-                }
-                let next_total = &total + BigUint::from(s.len());
-                if request
-                    .max_total_bytes
-                    .as_ref()
-                    .is_some_and(|max| next_total > *max)
-                {
-                    return Ok(false);
-                }
+        let order = if request.order == GenerationOrder::Unordered {
+            GenerationOrder::Default
+        } else {
+            request.order
+        };
 
-                let output;
-                let emitted_s = if request.reverse_strings {
-                    output = s.chars().rev().collect::<String>();
-                    output.as_str()
+        generate::generate_parallel(&self.hir, &constraints, order, |s| {
+            if stopped {
+                return Ok(false);
+            }
+            if !started {
+                if request.start_string.as_deref() == Some(s) {
+                    started = true;
                 } else {
-                    s
-                };
-                let control = emit(emitted_s)?;
-                emitted += 1;
-                total = next_total;
-                if request.stop_string.as_deref() == Some(s) {
-                    stopped = true;
+                    return Ok(true);
                 }
-                Ok(control == GenerationControl::Continue)
-            },
-        )
+            }
+            if request.limit.is_some_and(|limit| emitted >= limit) {
+                return Ok(false);
+            }
+            let next_total = &total + BigUint::from(s.len());
+            if request
+                .max_total_bytes
+                .as_ref()
+                .is_some_and(|max| next_total > *max)
+            {
+                return Ok(false);
+            }
+
+            let output;
+            let emitted_s = if request.reverse_strings {
+                output = s.chars().rev().collect::<String>();
+                output.as_str()
+            } else {
+                s
+            };
+            let control = emit(emitted_s)?;
+            emitted += 1;
+            total = next_total;
+            if request.stop_string.as_deref() == Some(s) {
+                stopped = true;
+            }
+            Ok(control == GenerationControl::Continue)
+        })
+    }
+
+    pub(crate) fn generate_file<W>(
+        &self,
+        request: GenerationRequest,
+        writer: &mut W,
+    ) -> Result<()>
+    where
+        W: Write + Send,
+    {
+        self.validate_generation_request(&request)?;
+        if !request.order.is_ordered()
+            && request.limit.is_none()
+            && request.max_total_bytes.is_none()
+            && request.start_string.is_none()
+            && request.stop_string.is_none()
+            && generate::generate_unordered_file(
+                &self.hir,
+                &self.constraints,
+                request.reverse_strings,
+                writer,
+            )?
+        {
+            return Ok(());
+        }
+
+        self.generate(request, |s| {
+            writeln!(writer, "{s}")?;
+            Ok(GenerationControl::Continue)
+        })
     }
 
     pub(crate) fn validate_generation_request(
@@ -202,6 +235,15 @@ mod tests {
             reverse_strings: false,
             order: GenerationOrder::Default,
         }
+    }
+
+    fn unordered_request(
+        limit: Option<u64>,
+        max_total_bytes: Option<u64>,
+    ) -> GenerationRequest {
+        let mut request = request(limit, max_total_bytes);
+        request.order = GenerationOrder::Unordered;
+        request
     }
 
     fn generate_strings(
@@ -376,5 +418,45 @@ mod tests {
         let out =
             generate_strings("[ab]{2}", constraints(0, None), req).unwrap();
         assert_eq!(out, vec!["aa", "ba", "ab", "bb"]);
+    }
+
+    #[test]
+    fn unordered_file_generation_emits_complete_match_strings() {
+        let corpus = Corpus::new("[ab]{2}", constraints(0, None)).unwrap();
+        let mut out = Vec::new();
+
+        corpus
+            .generate_file(unordered_request(None, None), &mut out)
+            .unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        let mut lines = text.lines().collect::<Vec<_>>();
+        lines.sort_unstable();
+        assert_eq!(lines, vec!["aa", "ab", "ba", "bb"]);
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn unordered_file_generation_with_limit_uses_ordered_cap_semantics() {
+        let corpus = Corpus::new("[ab]{2}", constraints(0, None)).unwrap();
+        let mut out = Vec::new();
+
+        corpus
+            .generate_file(unordered_request(Some(2), None), &mut out)
+            .unwrap();
+
+        assert_eq!(String::from_utf8(out).unwrap(), "aa\nab\n");
+    }
+
+    #[test]
+    fn unordered_file_generation_with_total_bytes_uses_ordered_cap_semantics() {
+        let corpus = Corpus::new("[ab]{2}", constraints(0, None)).unwrap();
+        let mut out = Vec::new();
+
+        corpus
+            .generate_file(unordered_request(None, Some(4)), &mut out)
+            .unwrap();
+
+        assert_eq!(String::from_utf8(out).unwrap(), "aa\nab\n");
     }
 }

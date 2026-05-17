@@ -1,3 +1,9 @@
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+
 use rayon::prelude::*;
 use regex_syntax::hir::Class;
 use regex_syntax::hir::Hir;
@@ -9,6 +15,8 @@ use crate::error::Error;
 use crate::error::Result;
 
 const PARALLEL_CHUNK_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+const UNORDERED_CHUNK_BYTES: usize = 256 * 1024;
+const UNORDERED_QUEUE_CHUNKS: usize = 16;
 
 enum GenerationChunk<'a> {
     Hir(&'a Hir),
@@ -22,8 +30,15 @@ enum GenerationChunk<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GenerationOrder {
+    Unordered,
     Default,
     Inverted,
+}
+
+impl GenerationOrder {
+    pub(crate) fn is_ordered(self) -> bool {
+        matches!(self, Self::Default | Self::Inverted)
+    }
 }
 
 pub(crate) fn generate<F>(
@@ -92,6 +107,141 @@ where
         }
     }
     Ok(())
+}
+
+pub(crate) fn generate_unordered_file<W>(
+    hir: &Hir,
+    constraints: &LengthConstraints,
+    reverse_strings: bool,
+    writer: &mut W,
+) -> Result<bool>
+where
+    W: Write + Send,
+{
+    if rayon::current_num_threads() <= 1 {
+        return Ok(false);
+    }
+    let Some(chunks) = generation_chunks(hir, constraints)? else {
+        return Ok(false);
+    };
+    if chunks.len() <= 1 {
+        return Ok(false);
+    }
+
+    let (tx, rx) =
+        mpsc::sync_channel::<Result<Vec<u8>>>(UNORDERED_QUEUE_CHUNKS);
+    let cancelled = Arc::new(AtomicBool::new(false));
+
+    rayon::scope(|scope| {
+        for chunk in chunks {
+            let tx = tx.clone();
+            let cancelled = Arc::clone(&cancelled);
+            scope.spawn(move |_| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return;
+                }
+                let result = collect_chunk_lines(
+                    &chunk,
+                    constraints,
+                    reverse_strings,
+                    &cancelled,
+                    &tx,
+                );
+                if let Err(err) = result {
+                    cancelled.store(true, Ordering::Relaxed);
+                    let _ = tx.send(Err(err));
+                }
+            });
+        }
+        drop(tx);
+
+        for chunk in rx {
+            match chunk {
+                Ok(bytes) => writer.write_all(&bytes)?,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    })?;
+    Ok(true)
+}
+
+fn collect_chunk_lines(
+    chunk: &GenerationChunk<'_>,
+    constraints: &LengthConstraints,
+    reverse_strings: bool,
+    cancelled: &AtomicBool,
+    tx: &mpsc::SyncSender<Result<Vec<u8>>>,
+) -> Result<()> {
+    let mut out = Vec::with_capacity(UNORDERED_CHUNK_BYTES);
+    let mut emit = |s: &str| {
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        append_line(&mut out, s, reverse_strings);
+        if out.len() >= UNORDERED_CHUNK_BYTES {
+            let next = Vec::with_capacity(UNORDERED_CHUNK_BYTES);
+            let full = std::mem::replace(&mut out, next);
+            if tx.send(Ok(full)).is_err() {
+                cancelled.store(true, Ordering::Relaxed);
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
+
+    match chunk {
+        GenerationChunk::Hir(hir) => {
+            let mut current = String::new();
+            generate_inner(
+                hir,
+                constraints,
+                GenerationOrder::Default,
+                &mut current,
+                &mut emit,
+            )?;
+        }
+        GenerationChunk::RepetitionTail {
+            sub,
+            min,
+            max,
+            prefix,
+        } => {
+            let mut current = prefix.clone();
+            generate_repeat_rec(
+                sub,
+                1,
+                *min,
+                *max,
+                constraints,
+                &mut current,
+                &mut emit,
+            )?;
+        }
+    }
+
+    if !out.is_empty() && !cancelled.load(Ordering::Relaxed) {
+        if tx.send(Ok(out)).is_err() {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    }
+    Ok(())
+}
+
+fn append_line(out: &mut Vec<u8>, s: &str, reverse_strings: bool) {
+    if reverse_strings {
+        let start = out.len();
+        for ch in s.chars().rev() {
+            let mut bytes = [0; 4];
+            out.extend_from_slice(ch.encode_utf8(&mut bytes).as_bytes());
+        }
+        if out.len() == start {
+            // Keep empty Match Strings newline-delimited.
+        }
+    } else {
+        out.extend_from_slice(s.as_bytes());
+    }
+    out.push(b'\n');
 }
 
 struct ChunkOutput {
@@ -310,7 +460,7 @@ where
         let start_len = current.len();
         let mut keep = true;
         match order {
-            GenerationOrder::Default => {
+            GenerationOrder::Unordered | GenerationOrder::Default => {
                 generate_prefixes(
                     &parts[0],
                     constraints.max,

@@ -9,7 +9,6 @@ use num_bigint::BigUint;
 use crate::calculate::Amount;
 use crate::cli;
 use crate::corpus::Corpus;
-use crate::corpus::GenerationControl;
 use crate::corpus::GenerationRequest;
 use crate::corpus::LengthConstraints;
 use crate::error::Error;
@@ -63,8 +62,13 @@ pub(crate) fn run() -> Result<()> {
             reverse_strings: m.get_flag("reverse-strings"),
             order: if m.get_flag("invert-order") {
                 GenerationOrder::Inverted
-            } else {
+            } else if m.get_flag("ordered")
+                || m.get_one::<String>("start-string").is_some()
+                || m.get_one::<String>("stop-string").is_some()
+            {
                 GenerationOrder::Default
+            } else {
+                GenerationOrder::Unordered
             },
         };
         corpus.validate_generation_request(&request)?;
@@ -150,16 +154,18 @@ fn generate_output(
     request: GenerationRequest,
     out: Option<PathBuf>,
 ) -> Result<()> {
-    let mut writer: Box<dyn Write> = match out {
-        Some(path) => Box::new(BufWriter::new(File::create(path)?)),
-        None => Box::new(BufWriter::new(io::stdout())),
-    };
-
-    corpus.generate(request, |s| {
-        writeln!(writer, "{s}")?;
-        Ok(GenerationControl::Continue)
-    })?;
-    writer.flush()?;
+    match out {
+        Some(path) => {
+            let mut writer = BufWriter::new(File::create(path)?);
+            corpus.generate_file(request, &mut writer)?;
+            writer.flush()?;
+        }
+        None => {
+            let mut writer = BufWriter::new(io::stdout());
+            corpus.generate_file(request, &mut writer)?;
+            writer.flush()?;
+        }
+    }
     Ok(())
 }
 
