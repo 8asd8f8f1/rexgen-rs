@@ -2,6 +2,6 @@ edition = "2024"
 imports_granularity = "Item"
 max_width = 80
 wrap_comments = true
-format_strings = true
+# format_strings = true
 group_imports = "StdExternalCrate"
 reorder_imports = true
