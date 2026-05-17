@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.102"
 bumpalo = "3.20.2"
+byte-unit = "5.2.0"
 clap = "4.6.1"
 clap_complete = "4.6.0"
 regex = "1.12.3"

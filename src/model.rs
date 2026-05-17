@@ -1,5 +1,8 @@
 use std::str::FromStr;
 
+use byte_unit::Byte;
+use byte_unit::Unit;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ByteSize(pub usize);
 
@@ -20,16 +23,26 @@ impl FromStr for ByteSize {
             return Err(format!("invalid byte size: {input}"));
         }
 
+        if !unit
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || ch.is_ascii_whitespace())
+        {
+            return Err(format!("invalid byte size: {input}"));
+        }
+
         let value = digits
-            .parse::<usize>()
+            .parse::<u128>()
             .map_err(|_| format!("byte size too large: {input}"))?;
-        let unit = normalize_unit(unit);
-        let multiplier = unit_multiplier(&unit)
-            .ok_or_else(|| format!("unrecognized byte unit: {unit}"))?;
-        value
-            .checked_mul(multiplier)
+        let normalized_unit = normalize_unit(unit);
+        let unit = parse_unit(&normalized_unit).ok_or_else(|| {
+            format!("unrecognized byte unit: {normalized_unit}")
+        })?;
+        let bytes = Byte::from_u128_with_unit(value, unit)
+            .ok_or_else(|| format!("byte size too large: {input}"))?
+            .as_u128();
+        usize::try_from(bytes)
             .map(ByteSize)
-            .ok_or_else(|| format!("byte size too large: {input}"))
+            .map_err(|_| format!("byte size too large: {input}"))
     }
 }
 
@@ -40,29 +53,25 @@ fn normalize_unit(unit: &str) -> String {
         .collect()
 }
 
-fn unit_multiplier(unit: &str) -> Option<usize> {
+fn parse_unit(unit: &str) -> Option<Unit> {
     match unit {
-        "" | "b" | "byte" | "bytes" => Some(1),
-        "k" | "kb" | "kilo" | "kilos" | "kilobyte" | "kilobytes" => Some(1_000),
+        "" | "b" | "byte" | "bytes" => Some(Unit::B),
+        "k" | "kb" | "kilo" | "kilos" | "kilobyte" | "kilobytes" => {
+            Some(Unit::KB)
+        }
         "m" | "mb" | "mega" | "megas" | "megabyte" | "megabytes" => {
-            Some(1_000_000)
+            Some(Unit::MB)
         }
         "g" | "gb" | "giga" | "gigas" | "gigabyte" | "gigabytes" => {
-            Some(1_000_000_000)
+            Some(Unit::GB)
         }
         "t" | "tb" | "tera" | "teras" | "terabyte" | "terabytes" => {
-            Some(1_000_000_000_000)
+            Some(Unit::TB)
         }
-        "ki" | "kib" | "kibi" | "kibibyte" | "kibibytes" => Some(1024),
-        "mi" | "mib" | "mebi" | "mebibyte" | "mebibytes" => {
-            Some(1024usize.pow(2))
-        }
-        "gi" | "gib" | "gibi" | "gibibyte" | "gibibytes" => {
-            Some(1024usize.pow(3))
-        }
-        "ti" | "tib" | "tebi" | "tebibyte" | "tebibytes" => {
-            Some(1024usize.pow(4))
-        }
+        "ki" | "kib" | "kibi" | "kibibyte" | "kibibytes" => Some(Unit::KiB),
+        "mi" | "mib" | "mebi" | "mebibyte" | "mebibytes" => Some(Unit::MiB),
+        "gi" | "gib" | "gibi" | "gibibyte" | "gibibytes" => Some(Unit::GiB),
+        "ti" | "tib" | "tebi" | "tebibyte" | "tebibytes" => Some(Unit::TiB),
         _ => None,
     }
 }
@@ -85,6 +94,9 @@ mod tests {
     #[test]
     fn parses_si_units() {
         assert_eq!(parse("1kb"), 1_000);
+        assert_eq!(parse("1 kilo"), 1_000);
+        assert_eq!(parse("1 kilobyte"), 1_000);
+        assert_eq!(parse("1 kilos"), 1_000);
         assert_eq!(parse("2 MB"), 2_000_000);
         assert_eq!(parse("3 gigabytes"), 3_000_000_000);
     }
@@ -92,8 +104,18 @@ mod tests {
     #[test]
     fn parses_iec_units() {
         assert_eq!(parse("1kib"), 1024);
+        assert_eq!(parse("1 kibi"), 1024);
         assert_eq!(parse("2 MiB"), 2 * 1024 * 1024);
+        assert_eq!(parse("2 mebi"), 2 * 1024 * 1024);
+        assert_eq!(parse("2 mebibyte"), 2 * 1024 * 1024);
         assert_eq!(parse("3 gibibytes"), 3 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn rejects_fractional_and_signed_inputs() {
+        assert!("1.5MB".parse::<ByteSize>().is_err());
+        assert!(".5MB".parse::<ByteSize>().is_err());
+        assert!("-1MB".parse::<ByteSize>().is_err());
     }
 
     #[test]
@@ -107,6 +129,9 @@ mod tests {
         let err = "999999999999999999999999999999999999999999999999999999999999999999999999tb"
             .parse::<ByteSize>()
             .unwrap_err();
+        assert!(err.contains("byte size too large"));
+
+        let err = "99999999999999999999tb".parse::<ByteSize>().unwrap_err();
         assert!(err.contains("byte size too large"));
     }
 }
