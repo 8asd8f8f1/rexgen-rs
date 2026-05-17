@@ -126,3 +126,46 @@ pub(crate) fn app() -> Command {
                 ),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::error::ErrorKind;
+
+    use super::app;
+
+    fn help_output(args: &[&str]) -> String {
+        let err = app().try_get_matches_from(args).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+        err.to_string()
+    }
+
+    #[test]
+    fn top_level_help_subcommand_prints_command_help() {
+        let help = help_output(&["rexgen", "help"]);
+
+        assert!(help.contains("Usage: rexgen"));
+        assert!(help.contains("Commands:"));
+        assert!(help.contains("completions"));
+        assert!(help.contains("Options:"));
+        assert!(help.contains("--generate"));
+        assert!(help.contains("Examples:"));
+    }
+
+    #[test]
+    fn top_level_help_flag_matches_help_subcommand() {
+        let help_subcommand = help_output(&["rexgen", "help"]);
+        let help_flag = help_output(&["rexgen", "--help"]);
+
+        assert_eq!(help_subcommand, help_flag);
+    }
+
+    #[test]
+    fn completions_help_subcommand_prints_completion_command_help() {
+        let help = help_output(&["rexgen", "help", "completions"]);
+
+        assert!(help.contains("Generate a shell completion script"));
+        assert!(help.contains("Usage: rexgen completions <SHELL>"));
+        assert!(help.contains("Arguments:"));
+        assert!(help.contains("<SHELL>"));
+    }
+}

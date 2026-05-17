@@ -52,6 +52,10 @@ _Avoid_: Safety prompt, confirm flag
 A shell integration script generated for command-line argument completion.
 _Avoid_: Shell helper, autocomplete file
 
+**Command Help**:
+Generated CLI usage text for the top-level command or one of its subcommands.
+_Avoid_: Usage guide, tutorial
+
 ## Relationships
 
 - A **Pattern** describes zero or more **Match Strings**.
@@ -64,6 +68,7 @@ _Avoid_: Shell helper, autocomplete file
 - A **Total Byte Limit** affects emitted output, but does not redefine the **Corpus Byte Size**.
 - **Generation Confirmation** applies before generating **Match Strings** unless explicitly bypassed.
 - A **Completion Script** describes the CLI interface, not any **Pattern** or **Corpus**.
+- **Command Help** describes available commands, arguments, and options; it does not analyze a **Pattern**.
 
 ## Example Dialogue
 
