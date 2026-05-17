@@ -1,11 +1,12 @@
 use clap::{Arg, ArgAction, Command, builder::ValueParser};
 
+use crate::model::ByteSize;
+
 pub(crate) fn app() -> Command {
     Command::new("rexgen")
         .arg(
             Arg::new("pattern")
-                .short('p')
-                .long("pattern")
+                .index(1)
                 .action(ArgAction::Set)
                 .required(true)
                 .value_parser(ValueParser::string()),
@@ -25,6 +26,12 @@ pub(crate) fn app() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("yes")
+                .short('y')
+                .long("yes")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("limit")
                 .long("limit")
                 .action(ArgAction::Set)
@@ -32,21 +39,24 @@ pub(crate) fn app() -> Command {
         )
         .arg(
             Arg::new("min-len")
+                .short('l')
                 .long("min-len")
                 .action(ArgAction::Set)
-                .value_parser(clap::value_parser!(usize)),
+                .value_parser(clap::value_parser!(ByteSize)),
         )
         .arg(
             Arg::new("max-len")
+                .short('u')
                 .long("max-len")
                 .action(ArgAction::Set)
-                .value_parser(clap::value_parser!(usize)),
+                .value_parser(clap::value_parser!(ByteSize)),
         )
         .arg(
             Arg::new("max-total-bytes")
+                .short('m')
                 .long("max-total-bytes")
                 .action(ArgAction::Set)
-                .value_parser(ValueParser::string()),
+                .value_parser(clap::value_parser!(ByteSize)),
         )
         .arg(
             Arg::new("out")

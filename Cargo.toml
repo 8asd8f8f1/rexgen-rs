@@ -13,3 +13,10 @@ regex-syntax = "0.8.10"
 thiserror = "2.0.18"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-unit = 1
+panit = "abort"

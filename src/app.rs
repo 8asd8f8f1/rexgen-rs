@@ -9,7 +9,7 @@ use crate::calculate::{self, Amount};
 use crate::cli::app;
 use crate::error::{Error, Result};
 use crate::generate;
-use crate::model::Limits;
+use crate::model::{ByteSize, Limits};
 
 pub(crate) fn run() -> Result<()> {
     let m = app().get_matches();
@@ -18,8 +18,8 @@ pub(crate) fn run() -> Result<()> {
         .ok_or_else(|| Error::Message("missing pattern".to_string()))?;
     let hir = Parser::new().parse(pattern)?;
     let limits = Limits {
-        min_len: *m.get_one::<usize>("min-len").unwrap_or(&0),
-        max_len: m.get_one::<usize>("max-len").copied(),
+        min_len: m.get_one::<ByteSize>("min-len").map_or(0, |size| size.0),
+        max_len: m.get_one::<ByteSize>("max-len").map(|size| size.0),
     };
     if let Some(max) = limits.max_len {
         if limits.min_len > max {
@@ -36,11 +36,16 @@ pub(crate) fn run() -> Result<()> {
     if want_generate {
         let limit = m.get_one::<u64>("limit").copied();
         let max_total = m
-            .get_one::<String>("max-total-bytes")
-            .map(|s| parse_size(s))
-            .transpose()?;
+            .get_one::<ByteSize>("max-total-bytes")
+            .map(|size| BigUint::from(size.0));
         let out = m.get_one::<PathBuf>("out").cloned();
         let generate_limits = generation_limits(&hir, &limits, limit);
+        if !m.get_flag("yes")
+            && !confirm_generation(pattern, &generate_limits, limit, &max_total, out.as_ref())?
+        {
+            eprintln!("generation aborted");
+            return Ok(());
+        }
         generate_output(&hir, &generate_limits, limit, max_total, out)?;
     }
 
@@ -58,6 +63,41 @@ pub(crate) fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn confirm_generation(
+    pattern: &str,
+    limits: &Limits,
+    limit: Option<u64>,
+    max_total: &Option<BigUint>,
+    out: Option<&PathBuf>,
+) -> Result<bool> {
+    eprintln!("Generate matching strings?");
+    eprintln!("pattern: {pattern}");
+    eprintln!("min length: {} bytes", limits.min_len);
+    if let Some(max_len) = limits.max_len {
+        eprintln!("max length: {max_len} bytes");
+    }
+    if let Some(limit) = limit {
+        eprintln!("string limit: {limit}");
+    }
+    if let Some(max_total) = max_total {
+        eprintln!("total byte limit: {max_total}");
+    }
+    if let Some(out) = out {
+        eprintln!("output: {}", out.display());
+    } else {
+        eprintln!("output: stdout");
+    }
+    eprint!("Continue? [y/N] ");
+    io::stderr().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn generation_limits(hir: &regex_syntax::hir::Hir, limits: &Limits, limit: Option<u64>) -> Limits {
@@ -119,27 +159,4 @@ fn format_binary(bytes: &BigUint) -> String {
         unit += 1;
     }
     format!("{value} {}", units[unit])
-}
-
-fn parse_size(input: &str) -> Result<BigUint> {
-    let trimmed = input.trim();
-    let split_at = trimmed
-        .find(|ch: char| !ch.is_ascii_digit())
-        .unwrap_or(trimmed.len());
-    let (digits, suffix) = trimmed.split_at(split_at);
-    if digits.is_empty() {
-        return Err(Error::Message(format!("invalid size: {input}")));
-    }
-    let mut value = digits
-        .parse::<BigUint>()
-        .map_err(|_| Error::Message(format!("invalid size: {input}")))?;
-    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
-        "" | "b" => 1u32,
-        "k" | "kb" | "kib" => 1024u32,
-        "m" | "mb" | "mib" => 1024u32.pow(2),
-        "g" | "gb" | "gib" => 1024u32.pow(3),
-        _ => return Err(Error::Message(format!("invalid size unit: {suffix}"))),
-    };
-    value *= multiplier;
-    Ok(value)
 }
