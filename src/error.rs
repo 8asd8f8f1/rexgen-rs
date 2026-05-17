@@ -1,14 +1,17 @@
-use thiserror::Error;
-
 pub(crate) type Result<T> = core::result::Result<T, Error>;
-// pub(crate) type Error = Box<dyn std::error::Error>;
 
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error("Io error")]
-    Io,
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 
-    #[error("rexgex parse error: ")]
-    Parse,
+    #[error("regex parse error: {0}")]
+    Parse(#[from] regex_syntax::Error),
+
+    #[error("unsupported regex feature: {0}")]
+    Unsupported(&'static str),
+
+    #[error("{0}")]
+    Message(String),
 }

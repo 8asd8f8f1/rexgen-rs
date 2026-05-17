@@ -1,6 +1,6 @@
 use clap::{Arg, ArgAction, Command, builder::ValueParser};
 
-pub(crate) fn App() -> Command {
+pub(crate) fn app() -> Command {
     Command::new("rexgen")
         .arg(
             Arg::new("pattern")
@@ -17,11 +17,42 @@ pub(crate) fn App() -> Command {
                 .long("count")
                 .action(ArgAction::SetTrue),
         )
+        .arg(Arg::new("size").long("size").action(ArgAction::SetTrue))
         .arg(
             Arg::new("generate")
                 .short('g')
                 .long("generate")
-                .action(ArgAction::SetTrue)
-                .conflicts_with("count"),
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(u64)),
+        )
+        .arg(
+            Arg::new("min-len")
+                .long("min-len")
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("max-len")
+                .long("max-len")
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("max-total-bytes")
+                .long("max-total-bytes")
+                .action(ArgAction::Set)
+                .value_parser(ValueParser::string()),
+        )
+        .arg(
+            Arg::new("out")
+                .short('o')
+                .long("out")
+                .action(ArgAction::Set)
+                .value_parser(ValueParser::path_buf()),
         )
 }
