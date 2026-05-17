@@ -1,0 +1,13 @@
+[package]
+name = "rexgen-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+bumpalo = "3.20.2"
+clap = "4.6.1"
+regex = "1.12.3"
+regex-automata = "0.4.14"
+regex-syntax = "0.8.10"
+thiserror = "2.0.18"
