@@ -6,13 +6,22 @@ use num_bigint::BigUint;
 use regex_syntax::Parser;
 
 use crate::calculate::{self, Amount};
-use crate::cli::app;
+use crate::cli;
 use crate::error::{Error, Result};
 use crate::generate;
 use crate::model::{ByteSize, Limits};
 
 pub(crate) fn run() -> Result<()> {
-    let m = app().get_matches();
+    let m = cli::app().get_matches();
+    if let Some(("completions", sub_m)) = m.subcommand() {
+        let shell = *sub_m
+            .get_one::<clap_complete::Shell>("shell")
+            .ok_or_else(|| Error::Message("missing shell".to_string()))?;
+        let mut cmd = cli::app();
+        clap_complete::generate(shell, &mut cmd, "rexgen", &mut io::stdout());
+        return Ok(());
+    }
+
     let pattern = m
         .get_one::<String>("pattern")
         .ok_or_else(|| Error::Message("missing pattern".to_string()))?;
