@@ -24,8 +24,8 @@ impl FromStr for ByteSize {
             .parse::<usize>()
             .map_err(|_| format!("byte size too large: {input}"))?;
         let unit = normalize_unit(unit);
-        let multiplier =
-            unit_multiplier(&unit).ok_or_else(|| format!("unrecognized byte unit: {unit}"))?;
+        let multiplier = unit_multiplier(&unit)
+            .ok_or_else(|| format!("unrecognized byte unit: {unit}"))?;
         value
             .checked_mul(multiplier)
             .map(ByteSize)
@@ -44,13 +44,25 @@ fn unit_multiplier(unit: &str) -> Option<usize> {
     match unit {
         "" | "b" | "byte" | "bytes" => Some(1),
         "k" | "kb" | "kilo" | "kilos" | "kilobyte" | "kilobytes" => Some(1_000),
-        "m" | "mb" | "mega" | "megas" | "megabyte" | "megabytes" => Some(1_000_000),
-        "g" | "gb" | "giga" | "gigas" | "gigabyte" | "gigabytes" => Some(1_000_000_000),
-        "t" | "tb" | "tera" | "teras" | "terabyte" | "terabytes" => Some(1_000_000_000_000),
+        "m" | "mb" | "mega" | "megas" | "megabyte" | "megabytes" => {
+            Some(1_000_000)
+        }
+        "g" | "gb" | "giga" | "gigas" | "gigabyte" | "gigabytes" => {
+            Some(1_000_000_000)
+        }
+        "t" | "tb" | "tera" | "teras" | "terabyte" | "terabytes" => {
+            Some(1_000_000_000_000)
+        }
         "ki" | "kib" | "kibi" | "kibibyte" | "kibibytes" => Some(1024),
-        "mi" | "mib" | "mebi" | "mebibyte" | "mebibytes" => Some(1024usize.pow(2)),
-        "gi" | "gib" | "gibi" | "gibibyte" | "gibibytes" => Some(1024usize.pow(3)),
-        "ti" | "tib" | "tebi" | "tebibyte" | "tebibytes" => Some(1024usize.pow(4)),
+        "mi" | "mib" | "mebi" | "mebibyte" | "mebibytes" => {
+            Some(1024usize.pow(2))
+        }
+        "gi" | "gib" | "gibi" | "gibibyte" | "gibibytes" => {
+            Some(1024usize.pow(3))
+        }
+        "ti" | "tib" | "tebi" | "tebibyte" | "tebibytes" => {
+            Some(1024usize.pow(4))
+        }
         _ => None,
     }
 }

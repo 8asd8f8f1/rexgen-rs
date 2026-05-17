@@ -1,9 +1,13 @@
 use num_bigint::BigUint;
-use num_traits::{One, Zero};
-use regex_syntax::hir::{Class, Hir, HirKind};
+use num_traits::One;
+use num_traits::Zero;
+use regex_syntax::hir::Class;
+use regex_syntax::hir::Hir;
+use regex_syntax::hir::HirKind;
 
 use crate::corpus::LengthConstraints;
-use crate::error::{Error, Result};
+use crate::error::Error;
+use crate::error::Result;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Amount {
@@ -71,7 +75,8 @@ impl Dist {
                 .items
                 .iter()
                 .filter(|(len, _)| {
-                    *len >= constraints.min && constraints.max.is_none_or(|max| *len <= max)
+                    *len >= constraints.min
+                        && constraints.max.is_none_or(|max| *len <= max)
                 })
                 .cloned()
                 .collect(),
@@ -114,7 +119,12 @@ impl Dist {
         acc
     }
 
-    fn repeat(sub: &Self, min: u32, max: Option<u32>, max_len: Option<usize>) -> Self {
+    fn repeat(
+        sub: &Self,
+        min: u32,
+        max: Option<u32>,
+        max_len: Option<usize>,
+    ) -> Self {
         if sub.infinite && max.is_none() {
             return Self {
                 items: Vec::new(),
@@ -197,7 +207,10 @@ fn add_count(items: &mut Vec<(usize, BigUint)>, len: usize, count: BigUint) {
     }
 }
 
-pub(crate) fn analyze(hir: &Hir, constraints: &LengthConstraints) -> Result<Stats> {
+pub(crate) fn analyze(
+    hir: &Hir,
+    constraints: &LengthConstraints,
+) -> Result<Stats> {
     Ok(distribution(hir, constraints.max)?
         .filtered(constraints)
         .stats())
@@ -261,7 +274,9 @@ fn class_widths(class: &Class) -> Result<Vec<usize>> {
                     if b.is_ascii() {
                         widths.push(1);
                     } else {
-                        return Err(Error::Unsupported("non-UTF-8 byte classes"));
+                        return Err(Error::Unsupported(
+                            "non-UTF-8 byte classes",
+                        ));
                     }
                 }
             }
@@ -275,7 +290,8 @@ mod tests {
     use num_bigint::BigUint;
     use regex_syntax::Parser;
 
-    use super::{Amount, analyze};
+    use super::Amount;
+    use super::analyze;
     use crate::corpus::LengthConstraints;
 
     fn hir(pattern: &str) -> regex_syntax::hir::Hir {

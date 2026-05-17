@@ -1,4 +1,7 @@
-use clap::{Arg, ArgAction, Command, builder::ValueParser};
+use clap::Arg;
+use clap::ArgAction;
+use clap::Command;
+use clap::builder::ValueParser;
 use clap_complete::Shell;
 
 use crate::model::ByteSize;
@@ -8,17 +11,19 @@ pub(crate) fn app() -> Command {
         .bin_name("rexgen")
         .about("Count and generate strings matched by a regex")
         .long_about(
-            "rexgen counts how many UTF-8 strings a Rust regex can match, estimates total corpus \
-             size in bytes, and can generate matching strings in deterministic regex traversal order.",
+            "rexgen counts how many UTF-8 strings a Rust regex can match, \
+             estimates total corpus size in bytes, and can generate matching \
+             strings in deterministic regex traversal order.",
         )
         .subcommand_negates_reqs(true)
         .after_help(
-            "Examples:\n  rexgen 'a|bc|[de]'\n  rexgen 'a*' --max-len 1KiB --count\n  \
-             rexgen '[ab]{1,3}' --generate --yes --max-total-bytes 4b\n  \
-             rexgen '[[:lower:]]{4}' --generate --out words.txt\n  \
-             rexgen completions bash\n\nByte units:\n  Raw numbers are bytes. SI units use base 10: kb, MB, gigabytes. \
-             IEC units use base 2: KiB, MiB, gibibytes.\n\nGeneration safety:\n  \
-             --generate asks for confirmation before writing strings. Use --yes for scripts.",
+            "Examples:\n  rexgen 'a|bc|[de]'\n  rexgen 'a*' --max-len 1KiB \
+             --count\n  rexgen '[ab]{1,3}' --generate --yes --max-total-bytes \
+             4b\n  rexgen '[[:lower:]]{4}' --generate --out words.txt\n  \
+             rexgen completions bash\n\nByte units:\n  Raw numbers are bytes. \
+             SI units use base 10: kb, MB, gigabytes. IEC units use base 2: \
+             KiB, MiB, gibibytes.\n\nGeneration safety:\n  --generate asks \
+             for confirmation before writing strings. Use --yes for scripts.",
         )
         .arg(
             Arg::new("pattern")
@@ -28,8 +33,9 @@ pub(crate) fn app() -> Command {
                 .value_name("PATTERN")
                 .help("Rust regex pattern to analyze or generate")
                 .long_help(
-                    "Rust regex pattern to analyze or generate. The regex is parsed with \
-                     regex-syntax and output strings are valid UTF-8.",
+                    "Rust regex pattern to analyze or generate. The regex is \
+                     parsed with regex-syntax and output strings are valid \
+                     UTF-8.",
                 )
                 .value_parser(ValueParser::string()),
         )
@@ -53,8 +59,9 @@ pub(crate) fn app() -> Command {
                 .long("generate")
                 .help("Generate matching strings")
                 .long_help(
-                    "Generate matching strings, one per line. Without --yes, rexgen asks for \
-                     confirmation before writing to stdout or opening --out.",
+                    "Generate matching strings, one per line. Without --yes, \
+                     rexgen asks for confirmation before writing to stdout or \
+                     opening --out.",
                 )
                 .action(ArgAction::SetTrue),
         )
@@ -97,7 +104,10 @@ pub(crate) fn app() -> Command {
                 .long("max-total-bytes")
                 .action(ArgAction::Set)
                 .value_name("BYTES")
-                .help("Stop generation before total emitted string bytes exceed this cap")
+                .help(
+                    "Stop generation before total emitted string bytes exceed \
+                     this cap",
+                )
                 .value_parser(clap::value_parser!(ByteSize)),
         )
         .arg(
@@ -113,8 +123,9 @@ pub(crate) fn app() -> Command {
             Command::new("completions")
                 .about("Generate shell completion script")
                 .long_about(
-                    "Generate a shell completion script and print it to stdout. Redirect the \
-                     output to the location expected by your shell or package manager.",
+                    "Generate a shell completion script and print it to \
+                     stdout. Redirect the output to the location expected by \
+                     your shell or package manager.",
                 )
                 .arg(
                     Arg::new("shell")

@@ -1,10 +1,17 @@
-use regex_syntax::hir::{Class, Hir, HirKind};
+use regex_syntax::hir::Class;
+use regex_syntax::hir::Hir;
+use regex_syntax::hir::HirKind;
 
 use crate::calculate;
 use crate::corpus::LengthConstraints;
-use crate::error::{Error, Result};
+use crate::error::Error;
+use crate::error::Result;
 
-pub(crate) fn generate<F>(hir: &Hir, constraints: &LengthConstraints, mut emit: F) -> Result<()>
+pub(crate) fn generate<F>(
+    hir: &Hir,
+    constraints: &LengthConstraints,
+    mut emit: F,
+) -> Result<()>
 where
     F: FnMut(&str) -> Result<bool>,
 {
@@ -22,7 +29,9 @@ where
     F: FnMut(&str) -> Result<bool>,
 {
     match hir.kind() {
-        HirKind::Empty | HirKind::Look(_) => emit_if_allowed(current, constraints, emit),
+        HirKind::Empty | HirKind::Look(_) => {
+            emit_if_allowed(current, constraints, emit)
+        }
         HirKind::Literal(lit) => {
             let s = std::str::from_utf8(&lit.0)
                 .map_err(|_| Error::Unsupported("non-UTF-8 literals"))?;
@@ -42,7 +51,9 @@ where
             }
             Ok(true)
         }
-        HirKind::Capture(cap) => generate_inner(&cap.sub, constraints, current, emit),
+        HirKind::Capture(cap) => {
+            generate_inner(&cap.sub, constraints, current, emit)
+        }
         HirKind::Alternation(parts) => {
             for part in parts {
                 if !generate_inner(part, constraints, current, emit)? {
@@ -51,14 +62,19 @@ where
             }
             Ok(true)
         }
-        HirKind::Concat(parts) => generate_concat(parts, constraints, current, emit),
+        HirKind::Concat(parts) => {
+            generate_concat(parts, constraints, current, emit)
+        }
         HirKind::Repetition(rep) => {
             let max = match rep.max {
                 Some(max) => max,
                 None => repetition_cap(
                     &rep.sub,
                     constraints.max.ok_or_else(|| {
-                        Error::Message("infinite generation requires --max-len".to_string())
+                        Error::Message(
+                            "infinite generation requires --max-len"
+                                .to_string(),
+                        )
                     })?,
                 )?,
             };
@@ -72,7 +88,11 @@ fn repetition_cap(sub: &Hir, max_len: usize) -> Result<u32> {
     Ok((max_len / min_len) as u32)
 }
 
-fn emit_if_allowed<F>(current: &str, constraints: &LengthConstraints, emit: &mut F) -> Result<bool>
+fn emit_if_allowed<F>(
+    current: &str,
+    constraints: &LengthConstraints,
+    emit: &mut F,
+) -> Result<bool>
 where
     F: FnMut(&str) -> Result<bool>,
 {
@@ -191,7 +211,11 @@ where
     Ok(true)
 }
 
-fn collect_strings(hir: &Hir, max_len: Option<usize>, out: &mut Vec<String>) -> Result<()> {
+fn collect_strings(
+    hir: &Hir,
+    max_len: Option<usize>,
+    out: &mut Vec<String>,
+) -> Result<()> {
     match hir.kind() {
         HirKind::Empty | HirKind::Look(_) => out.push(String::new()),
         HirKind::Literal(lit) => {
@@ -305,7 +329,9 @@ fn class_strings(class: &Class) -> Result<Vec<String>> {
                     if b.is_ascii() {
                         out.push(char::from(b).to_string());
                     } else {
-                        return Err(Error::Unsupported("non-UTF-8 byte classes"));
+                        return Err(Error::Unsupported(
+                            "non-UTF-8 byte classes",
+                        ));
                     }
                 }
             }

@@ -1,13 +1,19 @@
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::BufWriter;
+use std::io::Write;
+use std::io::{self};
 use std::path::PathBuf;
 
 use num_bigint::BigUint;
 
 use crate::calculate::Amount;
 use crate::cli;
-use crate::corpus::{Corpus, GenerationControl, GenerationRequest, LengthConstraints};
-use crate::error::{Error, Result};
+use crate::corpus::Corpus;
+use crate::corpus::GenerationControl;
+use crate::corpus::GenerationRequest;
+use crate::corpus::LengthConstraints;
+use crate::error::Error;
+use crate::error::Result;
 use crate::model::ByteSize;
 
 pub(crate) fn run() -> Result<()> {
@@ -43,7 +49,12 @@ pub(crate) fn run() -> Result<()> {
         };
         let out = m.get_one::<PathBuf>("out").cloned();
         if !m.get_flag("yes")
-            && !confirm_generation(pattern, corpus.constraints(), &request, out.as_ref())?
+            && !confirm_generation(
+                pattern,
+                corpus.constraints(),
+                &request,
+                out.as_ref(),
+            )?
         {
             eprintln!("generation aborted");
             return Ok(());
@@ -121,7 +132,9 @@ fn generate_output(
 
 fn print_size(amount: &Amount) {
     match amount {
-        Amount::Finite(bytes) => println!("{} ({})", bytes, format_binary(bytes)),
+        Amount::Finite(bytes) => {
+            println!("{} ({})", bytes, format_binary(bytes))
+        }
         Amount::Infinite => println!("infinite"),
     }
 }

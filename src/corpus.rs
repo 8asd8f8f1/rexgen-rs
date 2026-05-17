@@ -1,8 +1,11 @@
 use num_bigint::BigUint;
-use regex_syntax::{Parser, hir::Hir};
+use regex_syntax::Parser;
+use regex_syntax::hir::Hir;
 
-use crate::calculate::{self, Stats};
-use crate::error::{Error, Result};
+use crate::calculate::Stats;
+use crate::calculate::{self};
+use crate::error::Error;
+use crate::error::Result;
 use crate::generate;
 
 pub(crate) struct Corpus {
@@ -30,7 +33,10 @@ pub(crate) enum GenerationControl {
 }
 
 impl Corpus {
-    pub(crate) fn new(pattern: &str, constraints: LengthConstraints) -> Result<Self> {
+    pub(crate) fn new(
+        pattern: &str,
+        constraints: LengthConstraints,
+    ) -> Result<Self> {
         constraints.validate()?;
         Ok(Self {
             hir: Parser::new().parse(pattern)?,
@@ -46,7 +52,11 @@ impl Corpus {
         calculate::analyze(&self.hir, &self.constraints)
     }
 
-    pub(crate) fn generate<F>(&self, request: GenerationRequest, mut emit: F) -> Result<()>
+    pub(crate) fn generate<F>(
+        &self,
+        request: GenerationRequest,
+        mut emit: F,
+    ) -> Result<()>
     where
         F: FnMut(&str) -> Result<GenerationControl>,
     {
@@ -103,14 +113,20 @@ impl LengthConstraints {
 mod tests {
     use num_bigint::BigUint;
 
-    use super::{Corpus, GenerationControl, GenerationRequest, LengthConstraints};
+    use super::Corpus;
+    use super::GenerationControl;
+    use super::GenerationRequest;
+    use super::LengthConstraints;
     use crate::calculate::Amount;
 
     fn constraints(min: usize, max: Option<usize>) -> LengthConstraints {
         LengthConstraints { min, max }
     }
 
-    fn request(limit: Option<u64>, max_total_bytes: Option<u64>) -> GenerationRequest {
+    fn request(
+        limit: Option<u64>,
+        max_total_bytes: Option<u64>,
+    ) -> GenerationRequest {
         GenerationRequest {
             limit,
             max_total_bytes: max_total_bytes.map(BigUint::from),
