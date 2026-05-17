@@ -81,6 +81,36 @@ pub(crate) fn app() -> Command {
                 .value_parser(clap::value_parser!(u64)),
         )
         .arg(
+            Arg::new("start-string")
+                .long("start-string")
+                .action(ArgAction::Set)
+                .value_name("STRING")
+                .help("First matching string to emit")
+                .value_parser(ValueParser::string()),
+        )
+        .arg(
+            Arg::new("stop-string")
+                .long("stop-string")
+                .action(ArgAction::Set)
+                .value_name("STRING")
+                .help("Final matching string to emit")
+                .value_parser(ValueParser::string()),
+        )
+        .arg(
+            Arg::new("reverse-strings")
+                .long("reverse-strings")
+                .help("Reverse each emitted string")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("invert-order")
+                .long("invert-order")
+                .help(
+                    "Vary earlier pattern components fastest while generating",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("min-len")
                 .short('l')
                 .long("min-len")
@@ -179,6 +209,10 @@ mod tests {
         assert!(help.contains("Options:"));
         assert!(help.contains("--generate"));
         assert!(help.contains("--threads"));
+        assert!(help.contains("--start-string"));
+        assert!(help.contains("--stop-string"));
+        assert!(help.contains("--reverse-strings"));
+        assert!(help.contains("--invert-order"));
         assert!(help.contains("Examples:"));
     }
 

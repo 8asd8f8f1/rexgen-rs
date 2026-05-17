@@ -1,4 +1,5 @@
 use num_bigint::BigUint;
+use regex::Regex;
 use regex_syntax::Parser;
 use regex_syntax::hir::Hir;
 
@@ -7,9 +8,11 @@ use crate::calculate::{self};
 use crate::error::Error;
 use crate::error::Result;
 use crate::generate;
+use crate::generate::GenerationOrder;
 
 pub(crate) struct Corpus {
     hir: Hir,
+    matcher: Regex,
     constraints: LengthConstraints,
 }
 
@@ -23,6 +26,10 @@ pub(crate) struct LengthConstraints {
 pub(crate) struct GenerationRequest {
     pub limit: Option<u64>,
     pub max_total_bytes: Option<BigUint>,
+    pub start_string: Option<String>,
+    pub stop_string: Option<String>,
+    pub reverse_strings: bool,
+    pub order: GenerationOrder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,8 +45,10 @@ impl Corpus {
         constraints: LengthConstraints,
     ) -> Result<Self> {
         constraints.validate()?;
+        let matcher = Regex::new(&format!("^(?:{pattern})$"))?;
         Ok(Self {
             hir: Parser::new().parse(pattern)?,
+            matcher,
             constraints,
         })
     }
@@ -60,28 +69,84 @@ impl Corpus {
     where
         F: FnMut(&str) -> Result<GenerationControl>,
     {
+        self.validate_generation_request(&request)?;
         let constraints = self.generation_constraints(request.limit);
         let mut emitted = 0u64;
         let mut total = BigUint::from(0u8);
+        let mut started = request.start_string.is_none();
+        let mut stopped = false;
 
-        generate::generate_parallel(&self.hir, &constraints, |s| {
-            if request.limit.is_some_and(|limit| emitted >= limit) {
-                return Ok(false);
-            }
-            let next_total = &total + BigUint::from(s.len());
-            if request
-                .max_total_bytes
-                .as_ref()
-                .is_some_and(|max| next_total > *max)
-            {
-                return Ok(false);
-            }
+        generate::generate_parallel(
+            &self.hir,
+            &constraints,
+            request.order,
+            |s| {
+                if stopped {
+                    return Ok(false);
+                }
+                if !started {
+                    if request.start_string.as_deref() == Some(s) {
+                        started = true;
+                    } else {
+                        return Ok(true);
+                    }
+                }
+                if request.limit.is_some_and(|limit| emitted >= limit) {
+                    return Ok(false);
+                }
+                let next_total = &total + BigUint::from(s.len());
+                if request
+                    .max_total_bytes
+                    .as_ref()
+                    .is_some_and(|max| next_total > *max)
+                {
+                    return Ok(false);
+                }
 
-            let control = emit(s)?;
-            emitted += 1;
-            total = next_total;
-            Ok(control == GenerationControl::Continue)
-        })
+                let output;
+                let emitted_s = if request.reverse_strings {
+                    output = s.chars().rev().collect::<String>();
+                    output.as_str()
+                } else {
+                    s
+                };
+                let control = emit(emitted_s)?;
+                emitted += 1;
+                total = next_total;
+                if request.stop_string.as_deref() == Some(s) {
+                    stopped = true;
+                }
+                Ok(control == GenerationControl::Continue)
+            },
+        )
+    }
+
+    pub(crate) fn validate_generation_request(
+        &self,
+        request: &GenerationRequest,
+    ) -> Result<()> {
+        self.validate_bound("start string", request.start_string.as_deref())?;
+        self.validate_bound("stop string", request.stop_string.as_deref())
+    }
+
+    fn validate_bound(&self, label: &str, value: Option<&str>) -> Result<()> {
+        let Some(value) = value else {
+            return Ok(());
+        };
+        if !self.matcher.is_match(value) {
+            return Err(Error::Message(format!(
+                "{label} must match the pattern"
+            )));
+        }
+        let len = value.len();
+        if len < self.constraints.min
+            || self.constraints.max.is_some_and(|max| len > max)
+        {
+            return Err(Error::Message(format!(
+                "{label} must satisfy length constraints"
+            )));
+        }
+        Ok(())
     }
 
     fn generation_constraints(&self, limit: Option<u64>) -> LengthConstraints {
@@ -118,6 +183,8 @@ mod tests {
     use super::GenerationRequest;
     use super::LengthConstraints;
     use crate::calculate::Amount;
+    use crate::error::Result;
+    use crate::generate::GenerationOrder;
 
     fn constraints(min: usize, max: Option<usize>) -> LengthConstraints {
         LengthConstraints { min, max }
@@ -130,7 +197,25 @@ mod tests {
         GenerationRequest {
             limit,
             max_total_bytes: max_total_bytes.map(BigUint::from),
+            start_string: None,
+            stop_string: None,
+            reverse_strings: false,
+            order: GenerationOrder::Default,
         }
+    }
+
+    fn generate_strings(
+        pattern: &str,
+        constraints: LengthConstraints,
+        request: GenerationRequest,
+    ) -> Result<Vec<String>> {
+        let corpus = Corpus::new(pattern, constraints)?;
+        let mut out = Vec::new();
+        corpus.generate(request, |s| {
+            out.push(s.to_string());
+            Ok(GenerationControl::Continue)
+        })?;
+        Ok(out)
     }
 
     fn finite(amount: Amount) -> BigUint {
@@ -207,5 +292,89 @@ mod tests {
             .unwrap();
 
         assert_eq!(out, vec!["a"]);
+    }
+
+    #[test]
+    fn generation_can_start_at_match_string() {
+        let mut req = request(None, None);
+        req.start_string = Some("ba".to_string());
+
+        let out =
+            generate_strings("[ab]{2}", constraints(0, None), req).unwrap();
+        assert_eq!(out, vec!["ba", "bb"]);
+    }
+
+    #[test]
+    fn generation_can_stop_at_match_string() {
+        let mut req = request(None, None);
+        req.stop_string = Some("ba".to_string());
+
+        let out =
+            generate_strings("[ab]{2}", constraints(0, None), req).unwrap();
+        assert_eq!(out, vec!["aa", "ab", "ba"]);
+    }
+
+    #[test]
+    fn generation_can_start_and_stop_at_match_strings() {
+        let mut req = request(None, None);
+        req.start_string = Some("ab".to_string());
+        req.stop_string = Some("ba".to_string());
+
+        let out =
+            generate_strings("[ab]{2}", constraints(0, None), req).unwrap();
+        assert_eq!(out, vec!["ab", "ba"]);
+    }
+
+    #[test]
+    fn generation_rejects_bounds_outside_pattern() {
+        let mut req = request(None, None);
+        req.start_string = Some("ca".to_string());
+
+        let err =
+            generate_strings("[ab]{2}", constraints(0, None), req).unwrap_err();
+        assert!(err.to_string().contains("must match the pattern"));
+    }
+
+    #[test]
+    fn generation_rejects_bounds_outside_length_constraints() {
+        let mut req = request(None, None);
+        req.stop_string = Some("a".to_string());
+
+        let err = generate_strings("[ab]{1,2}", constraints(2, None), req)
+            .unwrap_err();
+        assert!(err.to_string().contains("must satisfy length constraints"));
+    }
+
+    #[test]
+    fn generation_can_reverse_emitted_strings() {
+        let mut req = request(None, None);
+        req.reverse_strings = true;
+
+        let out = generate_strings("ab|éx", constraints(0, None), req).unwrap();
+        assert_eq!(out, vec!["ba", "xé"]);
+    }
+
+    #[test]
+    fn generation_reverse_does_not_change_analysis() {
+        let corpus = Corpus::new("ab|cd", constraints(0, None)).unwrap();
+        let stats = corpus.analyze().unwrap();
+
+        let mut req = request(None, None);
+        req.reverse_strings = true;
+        let out = generate_strings("ab|cd", constraints(0, None), req).unwrap();
+
+        assert_eq!(finite(stats.count), BigUint::from(2u8));
+        assert_eq!(finite(stats.total_bytes), BigUint::from(4u8));
+        assert_eq!(out, vec!["ba", "dc"]);
+    }
+
+    #[test]
+    fn generation_can_invert_fixed_repetition_order() {
+        let mut req = request(None, None);
+        req.order = GenerationOrder::Inverted;
+
+        let out =
+            generate_strings("[ab]{2}", constraints(0, None), req).unwrap();
+        assert_eq!(out, vec!["aa", "ba", "ab", "bb"]);
     }
 }

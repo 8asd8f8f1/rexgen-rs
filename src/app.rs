@@ -14,6 +14,7 @@ use crate::corpus::GenerationRequest;
 use crate::corpus::LengthConstraints;
 use crate::error::Error;
 use crate::error::Result;
+use crate::generate::GenerationOrder;
 use crate::model::ByteSize;
 
 pub(crate) fn run() -> Result<()> {
@@ -57,7 +58,16 @@ pub(crate) fn run() -> Result<()> {
             max_total_bytes: m
                 .get_one::<ByteSize>("max-total-bytes")
                 .map(|size| BigUint::from(size.0)),
+            start_string: m.get_one::<String>("start-string").cloned(),
+            stop_string: m.get_one::<String>("stop-string").cloned(),
+            reverse_strings: m.get_flag("reverse-strings"),
+            order: if m.get_flag("invert-order") {
+                GenerationOrder::Inverted
+            } else {
+                GenerationOrder::Default
+            },
         };
+        corpus.validate_generation_request(&request)?;
         let out = m.get_one::<PathBuf>("out").cloned();
         if !m.get_flag("yes")
             && !confirm_generation(
@@ -106,6 +116,18 @@ fn confirm_generation(
     }
     if let Some(max_total) = &request.max_total_bytes {
         eprintln!("total byte limit: {max_total}");
+    }
+    if let Some(start) = &request.start_string {
+        eprintln!("start string: {start}");
+    }
+    if let Some(stop) = &request.stop_string {
+        eprintln!("stop string: {stop}");
+    }
+    if request.reverse_strings {
+        eprintln!("reverse strings: yes");
+    }
+    if request.order == GenerationOrder::Inverted {
+        eprintln!("order: inverted");
     }
     if let Some(out) = out {
         eprintln!("output: {}", out.display());

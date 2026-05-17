@@ -9,6 +9,9 @@ pub(crate) enum Error {
     #[error("regex parse error: {0}")]
     Parse(#[from] regex_syntax::Error),
 
+    #[error("regex compile error: {0}")]
+    Regex(#[from] regex::Error),
+
     #[error("unsupported regex feature: {0}")]
     Unsupported(&'static str),
 

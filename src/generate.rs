@@ -20,6 +20,12 @@ enum GenerationChunk<'a> {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenerationOrder {
+    Default,
+    Inverted,
+}
+
 pub(crate) fn generate<F>(
     hir: &Hir,
     constraints: &LengthConstraints,
@@ -29,17 +35,36 @@ where
     F: FnMut(&str) -> Result<bool>,
 {
     let mut current = String::new();
-    generate_inner(hir, constraints, &mut current, &mut emit).map(|_| ())
+    generate_inner(
+        hir,
+        constraints,
+        GenerationOrder::Default,
+        &mut current,
+        &mut emit,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn generate_parallel<F>(
     hir: &Hir,
     constraints: &LengthConstraints,
+    order: GenerationOrder,
     mut emit: F,
 ) -> Result<()>
 where
     F: FnMut(&str) -> Result<bool>,
 {
+    if order == GenerationOrder::Inverted {
+        let mut current = String::new();
+        return generate_inner(
+            hir,
+            constraints,
+            order,
+            &mut current,
+            &mut emit,
+        )
+        .map(|_| ());
+    }
     if rayon::current_num_threads() <= 1 {
         return generate(hir, constraints, emit);
     }
@@ -94,7 +119,13 @@ fn collect_chunk(
     match chunk {
         GenerationChunk::Hir(hir) => {
             let mut current = String::new();
-            generate_inner(hir, constraints, &mut current, &mut emit)?;
+            generate_inner(
+                hir,
+                constraints,
+                GenerationOrder::Default,
+                &mut current,
+                &mut emit,
+            )?;
         }
         GenerationChunk::RepetitionTail {
             sub,
@@ -163,6 +194,7 @@ fn generation_chunks<'a>(
 fn generate_inner<F>(
     hir: &Hir,
     constraints: &LengthConstraints,
+    order: GenerationOrder,
     current: &mut String,
     emit: &mut F,
 ) -> Result<bool>
@@ -193,18 +225,18 @@ where
             Ok(true)
         }
         HirKind::Capture(cap) => {
-            generate_inner(&cap.sub, constraints, current, emit)
+            generate_inner(&cap.sub, constraints, order, current, emit)
         }
         HirKind::Alternation(parts) => {
             for part in parts {
-                if !generate_inner(part, constraints, current, emit)? {
+                if !generate_inner(part, constraints, order, current, emit)? {
                     return Ok(false);
                 }
             }
             Ok(true)
         }
         HirKind::Concat(parts) => {
-            generate_concat(parts, constraints, current, emit)
+            generate_concat(parts, constraints, order, current, emit)
         }
         HirKind::Repetition(rep) => {
             let max = match rep.max {
@@ -219,7 +251,15 @@ where
                     })?,
                 )?,
             };
-            generate_repeat(&rep.sub, rep.min, max, constraints, current, emit)
+            generate_repeat(
+                &rep.sub,
+                rep.min,
+                max,
+                constraints,
+                order,
+                current,
+                emit,
+            )
         }
     }
 }
@@ -247,6 +287,7 @@ where
 fn generate_concat<F>(
     parts: &[Hir],
     constraints: &LengthConstraints,
+    order: GenerationOrder,
     current: &mut String,
     emit: &mut F,
 ) -> Result<bool>
@@ -256,6 +297,7 @@ where
     fn rec<F>(
         parts: &[Hir],
         constraints: &LengthConstraints,
+        order: GenerationOrder,
         current: &mut String,
         emit: &mut F,
     ) -> Result<bool>
@@ -267,22 +309,62 @@ where
         }
         let start_len = current.len();
         let mut keep = true;
-        generate_prefixes(
-            &parts[0],
-            constraints.max,
-            current.len(),
-            &mut |candidate| {
-                let saved = candidate.to_string();
-                current.push_str(&saved);
-                keep = rec(&parts[1..], constraints, current, emit)?;
-                truncate_str(current, saved.len());
-                Ok(keep)
-            },
-        )?;
+        match order {
+            GenerationOrder::Default => {
+                generate_prefixes(
+                    &parts[0],
+                    constraints.max,
+                    current.len(),
+                    &mut |candidate| {
+                        let saved = candidate.to_string();
+                        current.push_str(&saved);
+                        keep = rec(
+                            &parts[1..],
+                            constraints,
+                            order,
+                            current,
+                            emit,
+                        )?;
+                        truncate_str(current, saved.len());
+                        Ok(keep)
+                    },
+                )?;
+            }
+            GenerationOrder::Inverted => {
+                if parts.len() == 1 {
+                    keep = generate_inner(
+                        &parts[0],
+                        constraints,
+                        order,
+                        current,
+                        emit,
+                    )?;
+                } else {
+                    let last = parts.len() - 1;
+                    generate_prefixes(
+                        &parts[last],
+                        constraints.max,
+                        current.len(),
+                        &mut |candidate| {
+                            let mut left_parts = parts[..last].to_vec();
+                            left_parts.push(Hir::literal(candidate.as_bytes()));
+                            keep = rec(
+                                &left_parts,
+                                constraints,
+                                order,
+                                current,
+                                emit,
+                            )?;
+                            Ok(keep)
+                        },
+                    )?;
+                }
+            }
+        }
         current.truncate(start_len);
         Ok(keep)
     }
-    rec(parts, constraints, current, emit)
+    rec(parts, constraints, order, current, emit)
 }
 
 fn generate_repeat<F>(
@@ -290,13 +372,84 @@ fn generate_repeat<F>(
     min: u32,
     max: u32,
     constraints: &LengthConstraints,
+    order: GenerationOrder,
     current: &mut String,
     emit: &mut F,
 ) -> Result<bool>
 where
     F: FnMut(&str) -> Result<bool>,
 {
+    if order == GenerationOrder::Inverted {
+        if min != max {
+            return Err(Error::Unsupported(
+                "inverted order for variable repetition",
+            ));
+        }
+        return generate_fixed_repeat_inverted(
+            sub,
+            max,
+            constraints,
+            current,
+            emit,
+        );
+    }
     generate_repeat_rec(sub, 0, min, max, constraints, current, emit)
+}
+
+fn generate_fixed_repeat_inverted<F>(
+    sub: &Hir,
+    reps: u32,
+    constraints: &LengthConstraints,
+    current: &mut String,
+    emit: &mut F,
+) -> Result<bool>
+where
+    F: FnMut(&str) -> Result<bool>,
+{
+    fn rec<F>(
+        pieces: &[String],
+        slots: &mut [String],
+        slot: isize,
+        constraints: &LengthConstraints,
+        current: &mut String,
+        emit: &mut F,
+    ) -> Result<bool>
+    where
+        F: FnMut(&str) -> Result<bool>,
+    {
+        if slot < 0 {
+            let start_len = current.len();
+            for piece in slots.iter() {
+                current.push_str(piece);
+            }
+            let keep = emit_if_allowed(current, constraints, emit)?;
+            current.truncate(start_len);
+            return Ok(keep);
+        }
+
+        for piece in pieces {
+            slots[slot as usize] = piece.clone();
+            if !rec(pieces, slots, slot - 1, constraints, current, emit)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    let mut pieces = Vec::new();
+    collect_strings(sub, constraints.max, &mut pieces)?;
+    if pieces.iter().any(|piece| piece.is_empty()) {
+        return Err(Error::Unsupported("inverted order for empty repetition"));
+    }
+    let mut slots = vec![String::new(); reps as usize];
+    rec(
+        &pieces,
+        &mut slots,
+        reps as isize - 1,
+        constraints,
+        current,
+        emit,
+    )
 }
 
 fn generate_repeat_rec<F>(
@@ -499,6 +652,7 @@ fn truncate_str(s: &mut String, bytes: usize) {
 mod tests {
     use regex_syntax::Parser;
 
+    use super::GenerationOrder;
     use super::generate;
     use super::generate_parallel;
     use crate::corpus::LengthConstraints;
@@ -525,10 +679,15 @@ mod tests {
     #[test]
     fn parallel_generation_preserves_alternation_order() {
         let mut out = Vec::new();
-        generate_parallel(&hir("a|b{1,2}|c"), &constraints(0, None), |s| {
-            out.push(s.to_string());
-            Ok(true)
-        })
+        generate_parallel(
+            &hir("a|b{1,2}|c"),
+            &constraints(0, None),
+            GenerationOrder::Default,
+            |s| {
+                out.push(s.to_string());
+                Ok(true)
+            },
+        )
         .unwrap();
         assert_eq!(out, vec!["a", "b", "bb", "c"]);
     }
@@ -536,10 +695,15 @@ mod tests {
     #[test]
     fn parallel_generation_preserves_fixed_repetition_order() {
         let mut out = Vec::new();
-        generate_parallel(&hir("[ab]{2}"), &constraints(0, None), |s| {
-            out.push(s.to_string());
-            Ok(true)
-        })
+        generate_parallel(
+            &hir("[ab]{2}"),
+            &constraints(0, None),
+            GenerationOrder::Default,
+            |s| {
+                out.push(s.to_string());
+                Ok(true)
+            },
+        )
         .unwrap();
         assert_eq!(out, vec!["aa", "ab", "ba", "bb"]);
     }
@@ -547,10 +711,15 @@ mod tests {
     #[test]
     fn parallel_generation_honors_callback_stop_in_output_order() {
         let mut out = Vec::new();
-        generate_parallel(&hir("[ab]{2}"), &constraints(0, None), |s| {
-            out.push(s.to_string());
-            Ok(out.len() < 2)
-        })
+        generate_parallel(
+            &hir("[ab]{2}"),
+            &constraints(0, None),
+            GenerationOrder::Default,
+            |s| {
+                out.push(s.to_string());
+                Ok(out.len() < 2)
+            },
+        )
         .unwrap();
         assert_eq!(out, vec!["aa", "ab"]);
     }

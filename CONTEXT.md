@@ -40,9 +40,21 @@ _Avoid_: Size constraint, char limit
 A maximum number of **Match Strings** to emit.
 _Avoid_: Count limit, cap
 
+**Start Match String**:
+A **Match String** used as the first emitted value during generation.
+_Avoid_: Starting string, first word, resume point
+
+**Stop Match String**:
+A **Match String** used as the final emitted value during generation.
+_Avoid_: Ending string, last word, stop point
+
 **Total Byte Limit**:
 A maximum cumulative emitted byte count used while generating strings.
 _Avoid_: Size limit, max output size
+
+**Emission Transform**:
+A change applied to emitted output that does not redefine the **Corpus**.
+_Avoid_: Corpus transform, pattern transform
 
 **Generation Confirmation**:
 An explicit user approval step before emitting **Match Strings**.
@@ -65,7 +77,10 @@ _Avoid_: Usage guide, tutorial
 - A **Corpus Byte Size** is calculated from exactly one **Corpus**.
 - A **Length Constraint** affects both **Match Count** and generated **Match Strings**.
 - A **Generation Limit** affects generated **Match Strings**, but does not redefine the **Corpus**.
+- A **Start Match String** affects generated **Match Strings**, but does not redefine the **Corpus**.
+- A **Stop Match String** affects generated **Match Strings**, but does not redefine the **Corpus**.
 - A **Total Byte Limit** affects emitted output, but does not redefine the **Corpus Byte Size**.
+- An **Emission Transform** affects emitted output, but does not redefine the **Corpus**.
 - **Generation Confirmation** applies before generating **Match Strings** unless explicitly bypassed.
 - A **Completion Script** describes the CLI interface, not any **Pattern** or **Corpus**.
 - **Command Help** describes available commands, arguments, and options; it does not analyze a **Pattern**.
