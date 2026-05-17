@@ -1,11 +1,5 @@
 use std::str::FromStr;
 
-#[derive(Debug, Clone)]
-pub(crate) struct Limits {
-    pub min_len: usize,
-    pub max_len: Option<usize>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ByteSize(pub usize);
 

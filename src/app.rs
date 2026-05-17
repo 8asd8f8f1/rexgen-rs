@@ -3,13 +3,12 @@ use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 
 use num_bigint::BigUint;
-use regex_syntax::Parser;
 
-use crate::calculate::{self, Amount};
+use crate::calculate::Amount;
 use crate::cli;
+use crate::corpus::{Corpus, GenerationControl, GenerationRequest, LengthConstraints};
 use crate::error::{Error, Result};
-use crate::generate;
-use crate::model::{ByteSize, Limits};
+use crate::model::ByteSize;
 
 pub(crate) fn run() -> Result<()> {
     let m = cli::app().get_matches();
@@ -25,41 +24,35 @@ pub(crate) fn run() -> Result<()> {
     let pattern = m
         .get_one::<String>("pattern")
         .ok_or_else(|| Error::Message("missing pattern".to_string()))?;
-    let hir = Parser::new().parse(pattern)?;
-    let limits = Limits {
-        min_len: m.get_one::<ByteSize>("min-len").map_or(0, |size| size.0),
-        max_len: m.get_one::<ByteSize>("max-len").map(|size| size.0),
+    let constraints = LengthConstraints {
+        min: m.get_one::<ByteSize>("min-len").map_or(0, |size| size.0),
+        max: m.get_one::<ByteSize>("max-len").map(|size| size.0),
     };
-    if let Some(max) = limits.max_len {
-        if limits.min_len > max {
-            return Err(Error::Message(
-                "--min-len cannot exceed --max-len".to_string(),
-            ));
-        }
-    }
+    let corpus = Corpus::new(pattern, constraints)?;
 
     let want_count = m.get_flag("count");
     let want_size = m.get_flag("size");
     let want_generate = m.get_flag("generate");
 
     if want_generate {
-        let limit = m.get_one::<u64>("limit").copied();
-        let max_total = m
-            .get_one::<ByteSize>("max-total-bytes")
-            .map(|size| BigUint::from(size.0));
+        let request = GenerationRequest {
+            limit: m.get_one::<u64>("limit").copied(),
+            max_total_bytes: m
+                .get_one::<ByteSize>("max-total-bytes")
+                .map(|size| BigUint::from(size.0)),
+        };
         let out = m.get_one::<PathBuf>("out").cloned();
-        let generate_limits = generation_limits(&hir, &limits, limit);
         if !m.get_flag("yes")
-            && !confirm_generation(pattern, &generate_limits, limit, &max_total, out.as_ref())?
+            && !confirm_generation(pattern, corpus.constraints(), &request, out.as_ref())?
         {
             eprintln!("generation aborted");
             return Ok(());
         }
-        generate_output(&hir, &generate_limits, limit, max_total, out)?;
+        generate_output(&corpus, request, out)?;
     }
 
     if !want_generate || want_count || want_size {
-        let stats = calculate::analyze(&hir, &limits)?;
+        let stats = corpus.analyze()?;
         if want_count && !want_size {
             println!("{}", stats.count.display());
         } else if want_size && !want_count {
@@ -76,21 +69,20 @@ pub(crate) fn run() -> Result<()> {
 
 fn confirm_generation(
     pattern: &str,
-    limits: &Limits,
-    limit: Option<u64>,
-    max_total: &Option<BigUint>,
+    constraints: &LengthConstraints,
+    request: &GenerationRequest,
     out: Option<&PathBuf>,
 ) -> Result<bool> {
     eprintln!("Generate matching strings?");
     eprintln!("pattern: {pattern}");
-    eprintln!("min length: {} bytes", limits.min_len);
-    if let Some(max_len) = limits.max_len {
+    eprintln!("min length: {} bytes", constraints.min);
+    if let Some(max_len) = constraints.max {
         eprintln!("max length: {max_len} bytes");
     }
-    if let Some(limit) = limit {
+    if let Some(limit) = request.limit {
         eprintln!("string limit: {limit}");
     }
-    if let Some(max_total) = max_total {
+    if let Some(max_total) = &request.max_total_bytes {
         eprintln!("total byte limit: {max_total}");
     }
     if let Some(out) = out {
@@ -109,43 +101,19 @@ fn confirm_generation(
     ))
 }
 
-fn generation_limits(hir: &regex_syntax::hir::Hir, limits: &Limits, limit: Option<u64>) -> Limits {
-    if limits.max_len.is_some() || limit.is_none() {
-        return limits.clone();
-    }
-    let min = hir.properties().minimum_len().unwrap_or(0);
-    Limits {
-        min_len: limits.min_len,
-        max_len: Some(min.saturating_add(limit.unwrap() as usize)),
-    }
-}
-
 fn generate_output(
-    hir: &regex_syntax::hir::Hir,
-    limits: &Limits,
-    limit: Option<u64>,
-    max_total: Option<BigUint>,
+    corpus: &Corpus,
+    request: GenerationRequest,
     out: Option<PathBuf>,
 ) -> Result<()> {
     let mut writer: Box<dyn Write> = match out {
         Some(path) => Box::new(BufWriter::new(File::create(path)?)),
         None => Box::new(BufWriter::new(io::stdout())),
     };
-    let mut emitted = 0u64;
-    let mut total = BigUint::from(0u8);
 
-    generate::generate(hir, limits, |s| {
-        if limit.is_some_and(|limit| emitted >= limit) {
-            return Ok(false);
-        }
-        let next_total = &total + BigUint::from(s.len());
-        if max_total.as_ref().is_some_and(|max| next_total > *max) {
-            return Ok(false);
-        }
+    corpus.generate(request, |s| {
         writeln!(writer, "{s}")?;
-        emitted += 1;
-        total = next_total;
-        Ok(true)
+        Ok(GenerationControl::Continue)
     })?;
     writer.flush()?;
     Ok(())

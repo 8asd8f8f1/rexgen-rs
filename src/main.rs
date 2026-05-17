@@ -1,6 +1,7 @@
 mod app;
 mod calculate;
 mod cli;
+mod corpus;
 mod error;
 mod generate;
 mod model;

@@ -2,8 +2,8 @@ use num_bigint::BigUint;
 use num_traits::{One, Zero};
 use regex_syntax::hir::{Class, Hir, HirKind};
 
+use crate::corpus::LengthConstraints;
 use crate::error::{Error, Result};
-use crate::model::Limits;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Amount {
@@ -65,17 +65,17 @@ impl Dist {
         }
     }
 
-    fn filtered(&self, limits: &Limits) -> Self {
+    fn filtered(&self, constraints: &LengthConstraints) -> Self {
         Self {
             items: self
                 .items
                 .iter()
                 .filter(|(len, _)| {
-                    *len >= limits.min_len && limits.max_len.is_none_or(|max| *len <= max)
+                    *len >= constraints.min && constraints.max.is_none_or(|max| *len <= max)
                 })
                 .cloned()
                 .collect(),
-            infinite: self.infinite && limits.max_len.is_none(),
+            infinite: self.infinite && constraints.max.is_none(),
         }
     }
 
@@ -197,8 +197,10 @@ fn add_count(items: &mut Vec<(usize, BigUint)>, len: usize, count: BigUint) {
     }
 }
 
-pub(crate) fn analyze(hir: &Hir, limits: &Limits) -> Result<Stats> {
-    Ok(distribution(hir, limits.max_len)?.filtered(limits).stats())
+pub(crate) fn analyze(hir: &Hir, constraints: &LengthConstraints) -> Result<Stats> {
+    Ok(distribution(hir, constraints.max)?
+        .filtered(constraints)
+        .stats())
 }
 
 pub(crate) fn min_positive_len(hir: &Hir, max_len: usize) -> Result<usize> {
@@ -274,14 +276,14 @@ mod tests {
     use regex_syntax::Parser;
 
     use super::{Amount, analyze};
-    use crate::model::Limits;
+    use crate::corpus::LengthConstraints;
 
     fn hir(pattern: &str) -> regex_syntax::hir::Hir {
         Parser::new().parse(pattern).unwrap()
     }
 
-    fn limits(min_len: usize, max_len: Option<usize>) -> Limits {
-        Limits { min_len, max_len }
+    fn constraints(min: usize, max: Option<usize>) -> LengthConstraints {
+        LengthConstraints { min, max }
     }
 
     fn finite(amount: Amount) -> BigUint {
@@ -293,35 +295,35 @@ mod tests {
 
     #[test]
     fn counts_literals_alternation_and_classes() {
-        let stats = analyze(&hir("a|bc|[de]"), &limits(0, None)).unwrap();
+        let stats = analyze(&hir("a|bc|[de]"), &constraints(0, None)).unwrap();
         assert_eq!(finite(stats.count), BigUint::from(4u8));
         assert_eq!(finite(stats.total_bytes), BigUint::from(5u8));
     }
 
     #[test]
     fn counts_bounded_repetition() {
-        let stats = analyze(&hir("a{2,4}"), &limits(0, None)).unwrap();
+        let stats = analyze(&hir("a{2,4}"), &constraints(0, None)).unwrap();
         assert_eq!(finite(stats.count), BigUint::from(3u8));
         assert_eq!(finite(stats.total_bytes), BigUint::from(9u8));
     }
 
     #[test]
     fn counts_unicode_bytes() {
-        let stats = analyze(&hir("é|a"), &limits(0, None)).unwrap();
+        let stats = analyze(&hir("é|a"), &constraints(0, None)).unwrap();
         assert_eq!(finite(stats.count), BigUint::from(2u8));
         assert_eq!(finite(stats.total_bytes), BigUint::from(3u8));
     }
 
     #[test]
     fn reports_unbounded_repetition_as_infinite() {
-        let stats = analyze(&hir("a*"), &limits(0, None)).unwrap();
+        let stats = analyze(&hir("a*"), &constraints(0, None)).unwrap();
         assert!(matches!(stats.count, Amount::Infinite));
         assert!(matches!(stats.total_bytes, Amount::Infinite));
     }
 
     #[test]
     fn length_filters_bound_unbounded_repetition() {
-        let stats = analyze(&hir("a*"), &limits(1, Some(3))).unwrap();
+        let stats = analyze(&hir("a*"), &constraints(1, Some(3))).unwrap();
         assert_eq!(finite(stats.count), BigUint::from(3u8));
         assert_eq!(finite(stats.total_bytes), BigUint::from(6u8));
     }

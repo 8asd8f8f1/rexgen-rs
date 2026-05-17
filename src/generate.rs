@@ -1,35 +1,40 @@
 use regex_syntax::hir::{Class, Hir, HirKind};
 
 use crate::calculate;
+use crate::corpus::LengthConstraints;
 use crate::error::{Error, Result};
-use crate::model::Limits;
 
-pub(crate) fn generate<F>(hir: &Hir, limits: &Limits, mut emit: F) -> Result<()>
+pub(crate) fn generate<F>(hir: &Hir, constraints: &LengthConstraints, mut emit: F) -> Result<()>
 where
     F: FnMut(&str) -> Result<bool>,
 {
     let mut current = String::new();
-    generate_inner(hir, limits, &mut current, &mut emit).map(|_| ())
+    generate_inner(hir, constraints, &mut current, &mut emit).map(|_| ())
 }
 
-fn generate_inner<F>(hir: &Hir, limits: &Limits, current: &mut String, emit: &mut F) -> Result<bool>
+fn generate_inner<F>(
+    hir: &Hir,
+    constraints: &LengthConstraints,
+    current: &mut String,
+    emit: &mut F,
+) -> Result<bool>
 where
     F: FnMut(&str) -> Result<bool>,
 {
     match hir.kind() {
-        HirKind::Empty | HirKind::Look(_) => emit_if_allowed(current, limits, emit),
+        HirKind::Empty | HirKind::Look(_) => emit_if_allowed(current, constraints, emit),
         HirKind::Literal(lit) => {
             let s = std::str::from_utf8(&lit.0)
                 .map_err(|_| Error::Unsupported("non-UTF-8 literals"))?;
             current.push_str(s);
-            let keep_going = emit_if_allowed(current, limits, emit)?;
+            let keep_going = emit_if_allowed(current, constraints, emit)?;
             truncate_str(current, s.len());
             Ok(keep_going)
         }
         HirKind::Class(class) => {
             for s in class_strings(class)? {
                 current.push_str(&s);
-                let keep_going = emit_if_allowed(current, limits, emit)?;
+                let keep_going = emit_if_allowed(current, constraints, emit)?;
                 truncate_str(current, s.len());
                 if !keep_going {
                     return Ok(false);
@@ -37,27 +42,27 @@ where
             }
             Ok(true)
         }
-        HirKind::Capture(cap) => generate_inner(&cap.sub, limits, current, emit),
+        HirKind::Capture(cap) => generate_inner(&cap.sub, constraints, current, emit),
         HirKind::Alternation(parts) => {
             for part in parts {
-                if !generate_inner(part, limits, current, emit)? {
+                if !generate_inner(part, constraints, current, emit)? {
                     return Ok(false);
                 }
             }
             Ok(true)
         }
-        HirKind::Concat(parts) => generate_concat(parts, limits, current, emit),
+        HirKind::Concat(parts) => generate_concat(parts, constraints, current, emit),
         HirKind::Repetition(rep) => {
             let max = match rep.max {
                 Some(max) => max,
                 None => repetition_cap(
                     &rep.sub,
-                    limits.max_len.ok_or_else(|| {
+                    constraints.max.ok_or_else(|| {
                         Error::Message("infinite generation requires --max-len".to_string())
                     })?,
                 )?,
             };
-            generate_repeat(&rep.sub, rep.min, max, limits, current, emit)
+            generate_repeat(&rep.sub, rep.min, max, constraints, current, emit)
         }
     }
 }
@@ -67,12 +72,12 @@ fn repetition_cap(sub: &Hir, max_len: usize) -> Result<u32> {
     Ok((max_len / min_len) as u32)
 }
 
-fn emit_if_allowed<F>(current: &str, limits: &Limits, emit: &mut F) -> Result<bool>
+fn emit_if_allowed<F>(current: &str, constraints: &LengthConstraints, emit: &mut F) -> Result<bool>
 where
     F: FnMut(&str) -> Result<bool>,
 {
     let len = current.len();
-    if len < limits.min_len || limits.max_len.is_some_and(|max| len > max) {
+    if len < constraints.min || constraints.max.is_some_and(|max| len > max) {
         return Ok(true);
     }
     emit(current)
@@ -80,40 +85,50 @@ where
 
 fn generate_concat<F>(
     parts: &[Hir],
-    limits: &Limits,
+    constraints: &LengthConstraints,
     current: &mut String,
     emit: &mut F,
 ) -> Result<bool>
 where
     F: FnMut(&str) -> Result<bool>,
 {
-    fn rec<F>(parts: &[Hir], limits: &Limits, current: &mut String, emit: &mut F) -> Result<bool>
+    fn rec<F>(
+        parts: &[Hir],
+        constraints: &LengthConstraints,
+        current: &mut String,
+        emit: &mut F,
+    ) -> Result<bool>
     where
         F: FnMut(&str) -> Result<bool>,
     {
         if parts.is_empty() {
-            return emit_if_allowed(current, limits, emit);
+            return emit_if_allowed(current, constraints, emit);
         }
         let start_len = current.len();
         let mut keep = true;
-        generate_prefixes(&parts[0], limits.max_len, current.len(), &mut |candidate| {
-            let saved = candidate.to_string();
-            current.push_str(&saved);
-            keep = rec(&parts[1..], limits, current, emit)?;
-            truncate_str(current, saved.len());
-            Ok(keep)
-        })?;
+        generate_prefixes(
+            &parts[0],
+            constraints.max,
+            current.len(),
+            &mut |candidate| {
+                let saved = candidate.to_string();
+                current.push_str(&saved);
+                keep = rec(&parts[1..], constraints, current, emit)?;
+                truncate_str(current, saved.len());
+                Ok(keep)
+            },
+        )?;
         current.truncate(start_len);
         Ok(keep)
     }
-    rec(parts, limits, current, emit)
+    rec(parts, constraints, current, emit)
 }
 
 fn generate_repeat<F>(
     sub: &Hir,
     min: u32,
     max: u32,
-    limits: &Limits,
+    constraints: &LengthConstraints,
     current: &mut String,
     emit: &mut F,
 ) -> Result<bool>
@@ -125,32 +140,32 @@ where
         reps: u32,
         min: u32,
         max: u32,
-        limits: &Limits,
+        constraints: &LengthConstraints,
         current: &mut String,
         emit: &mut F,
     ) -> Result<bool>
     where
         F: FnMut(&str) -> Result<bool>,
     {
-        if reps >= min && !emit_if_allowed(current, limits, emit)? {
+        if reps >= min && !emit_if_allowed(current, constraints, emit)? {
             return Ok(false);
         }
         if reps == max {
             return Ok(true);
         }
         let mut keep = true;
-        generate_prefixes(sub, limits.max_len, current.len(), &mut |piece| {
+        generate_prefixes(sub, constraints.max, current.len(), &mut |piece| {
             if piece.is_empty() {
                 return Ok(true);
             }
             current.push_str(piece);
-            keep = rec(sub, reps + 1, min, max, limits, current, emit)?;
+            keep = rec(sub, reps + 1, min, max, constraints, current, emit)?;
             truncate_str(current, piece.len());
             Ok(keep)
         })?;
         Ok(keep)
     }
-    rec(sub, 0, min, max, limits, current, emit)
+    rec(sub, 0, min, max, constraints, current, emit)
 }
 
 fn generate_prefixes<F>(
@@ -309,20 +324,20 @@ mod tests {
     use regex_syntax::Parser;
 
     use super::generate;
-    use crate::model::Limits;
+    use crate::corpus::LengthConstraints;
 
     fn hir(pattern: &str) -> regex_syntax::hir::Hir {
         Parser::new().parse(pattern).unwrap()
     }
 
-    fn limits(min_len: usize, max_len: Option<usize>) -> Limits {
-        Limits { min_len, max_len }
+    fn constraints(min: usize, max: Option<usize>) -> LengthConstraints {
+        LengthConstraints { min, max }
     }
 
     #[test]
     fn generates_in_regex_order() {
         let mut out = Vec::new();
-        generate(&hir("a|b{1,2}"), &limits(0, None), |s| {
+        generate(&hir("a|b{1,2}"), &constraints(0, None), |s| {
             out.push(s.to_string());
             Ok(true)
         })
