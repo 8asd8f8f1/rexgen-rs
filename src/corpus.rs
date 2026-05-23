@@ -4,6 +4,7 @@ use regex_syntax::hir::HirKind;
 
 use crate::error::Error;
 use crate::error::Result;
+use crate::generate::Generate;
 
 pub(crate) struct Corpus {
     ast: Hir,
@@ -19,15 +20,22 @@ impl Corpus {
     }
 
     pub(crate) fn generate(&self) -> Result<()> {
-        match self.ast.kind() {
-            HirKind::Empty => println!("empty"),
-            HirKind::Literal(literal) => println!("literal: {:#?}", literal),
-            HirKind::Class(class) => println!("class: {:#?}", class),
-            HirKind::Repetition(rep) => println!("rep: {:#?}", rep),
-            HirKind::Capture(capture) => println!("capture: {:#?}", capture),
-            HirKind::Concat(concat) => println!("concat: {:#?}", concat),
-            _ => println!("none"),
-        }
+        let generate = Generate::new();
+
+        // match self.ast.kind() {
+        //     HirKind::Empty => println!("empty"),
+        //     HirKind::Literal(literal) => println!("literal: {:#?}", literal),
+        //     HirKind::Class(class) => println!("class: {:#?}", class),
+        //     HirKind::Repetition(rep) => println!("rep: {:#?}", rep),
+        //     HirKind::Capture(capture) => println!("capture: {:#?}", capture),
+        //     HirKind::Concat(concat) => println!("concat: {:#?}", concat),
+        //     _ => println!("none"),
+        // }
+
+        // println!("{:#?}", self.ast);
+
+        let res = generate.generate(&self.ast)?;
+
         Ok(())
     }
 }
